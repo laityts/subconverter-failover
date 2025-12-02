@@ -1,0 +1,37 @@
+name = "subconverter-failover"
+main = "index.js"
+compatibility_date = "2024-08-01"
+
+# KV命名空间绑定
+kv_namespaces = [
+  { binding = "SUB_BACKENDS", id = "1bda555a86834473ad4c0b53ae703fa8" }
+]
+
+# 环境变量（可在Cloudflare Dashboard中覆盖）
+[vars]
+# 后端URL列表（JSON数组格式）
+BACKEND_URLS = '["https://subapi.cmliussss.net","https://api.sub.zaoy.cn","https://subapi.sosoorg.com","https://url.v1.mk"]'
+
+# 缓存时间（毫秒，默认60秒）
+CACHE_TTL = "60000"
+
+# 健康检查超时（毫秒，默认2秒）
+HEALTH_CHECK_TIMEOUT = "2000"
+
+# Telegram通知配置（可选）
+TG_BOT_TOKEN = "7569921583:AAHITsO-87mglZqpS_ecaG6sYlVxoV5aGJU"
+TG_CHAT_ID = "-1003177803911"
+
+# 并发健康检查数量（默认3个）
+CONCURRENT_HEALTH_CHECKS = "5"
+
+# 通知冷却时间（毫秒，默认5分钟）
+NOTIFICATION_COOLDOWN = "300000"
+
+# 触发器配置
+[triggers]
+# 每5分钟执行一次（UTC时间）
+crons = ["*/5 * * * *"]
+
+# 日志配置
+logpush = true
