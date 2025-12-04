@@ -1,17 +1,17 @@
-// 配置常量（可通过环境变量覆盖）
+// 默认常量（可通过环境变量覆盖）
 const DEFAULT_CACHE_TTL = 60 * 1000; // 健康状态缓存1分钟
 const DEFAULT_HEALTH_CHECK_TIMEOUT = 2000; // 健康检查超时2秒
 const TG_MESSAGE_MAX_LENGTH = 4096; // Telegram消息最大长度
-const CONCURRENT_HEALTH_CHECKS = 5; // 并发健康检查数量
-const FAST_CHECK_TIMEOUT = 800; // 快速检查超时800ms（减少超时）
-const FAST_CHECK_CACHE_TTL = 2000; // 快速检查缓存2秒（缩短以提高新鲜度）
-const KV_WRITE_COOLDOWN = 30 * 1000; // KV写入冷却时间30秒
-const HEALTHY_WEIGHT_INCREMENT = 10; // 健康状态权重增量
-const FAILURE_WEIGHT_DECREMENT = 20; // 故障权重减量
-const MAX_WEIGHT = 100; // 最大权重
-const MIN_WEIGHT = 10; // 最小权重
-const WEIGHT_RECOVERY_RATE = 5; // 权重恢复速率（每成功一次增加）
-const BACKEND_STALE_THRESHOLD = 30 * 1000; // 后端信息过期阈值30秒
+const DEFAULT_CONCURRENT_HEALTH_CHECKS = 5; // 并发健康检查数量
+const DEFAULT_FAST_CHECK_TIMEOUT = 800; // 快速检查超时800ms
+const DEFAULT_FAST_CHECK_CACHE_TTL = 2000; // 快速检查缓存2秒
+const DEFAULT_KV_WRITE_COOLDOWN = 30 * 1000; // KV写入冷却时间30秒
+const DEFAULT_HEALTHY_WEIGHT_INCREMENT = 10; // 健康状态权重增量
+const DEFAULT_FAILURE_WEIGHT_DECREMENT = 20; // 故障权重减量
+const DEFAULT_MAX_WEIGHT = 100; // 最大权重
+const DEFAULT_MIN_WEIGHT = 10; // 最小权重
+const DEFAULT_WEIGHT_RECOVERY_RATE = 5; // 权重恢复速率
+const DEFAULT_BACKEND_STALE_THRESHOLD = 30 * 1000; // 后端信息过期阈值30秒
 
 // 默认后端列表
 const DEFAULT_BACKENDS = [];
@@ -32,7 +32,7 @@ let cache = {
   backendVersionCache: new Map(),
   lastKVWriteTimes: new Map(),
   lastHealthNotificationStatus: null,
-  lastServiceStatus: 'available',
+  lastServiceStatus: 'unknown', // 改为'unknown'，表示初始状态
   backendWeights: new Map(), // 新增：后端权重
   backendFailureCounts: new Map(), // 新增：后端失败计数
   lastSuccessfulRequests: new Map(), // 新增：最后成功请求时间
@@ -56,16 +56,98 @@ function generateRequestId() {
     .join('');
 }
 
-// 从环境变量获取配置值
+// 统一配置读取函数（支持类型转换和验证）
 function getConfig(env, key, defaultValue) {
-  return env[key] ? env[key] : defaultValue;
+  // 如果环境变量中不存在该键，返回默认值
+  if (!(key in env)) {
+    return defaultValue;
+  }
+  
+  const value = env[key];
+  
+  // 如果值是空字符串，返回默认值
+  if (value === '') {
+    return defaultValue;
+  }
+  
+  // 根据默认值的类型进行转换
+  if (typeof defaultValue === 'number') {
+    const num = parseInt(value, 10);
+    return isNaN(num) ? defaultValue : num;
+  }
+  
+  if (typeof defaultValue === 'boolean') {
+    return value === 'true' || value === '1' || value === 'yes';
+  }
+  
+  if (typeof defaultValue === 'object') {
+    try {
+      return JSON.parse(value);
+    } catch (error) {
+      console.warn(`解析JSON配置${key}失败，使用默认值:`, error);
+      return defaultValue;
+    }
+  }
+  
+  // 字符串类型直接返回
+  return value;
+}
+
+// 验证配置值的有效性
+function validateConfig(env, requestId) {
+  const configs = [
+    { key: 'CACHE_TTL', min: 1000, max: 300000, defaultValue: DEFAULT_CACHE_TTL },
+    { key: 'HEALTH_CHECK_TIMEOUT', min: 100, max: 10000, defaultValue: DEFAULT_HEALTH_CHECK_TIMEOUT },
+    { key: 'CONCURRENT_HEALTH_CHECKS', min: 1, max: 20, defaultValue: DEFAULT_CONCURRENT_HEALTH_CHECKS },
+    { key: 'FAST_CHECK_TIMEOUT', min: 100, max: 5000, defaultValue: DEFAULT_FAST_CHECK_TIMEOUT },
+    { key: 'FAST_CHECK_CACHE_TTL', min: 500, max: 30000, defaultValue: DEFAULT_FAST_CHECK_CACHE_TTL },
+    { key: 'KV_WRITE_COOLDOWN', min: 5000, max: 300000, defaultValue: DEFAULT_KV_WRITE_COOLDOWN },
+    { key: 'MAX_WEIGHT', min: 10, max: 1000, defaultValue: DEFAULT_MAX_WEIGHT },
+    { key: 'MIN_WEIGHT', min: 1, max: 100, defaultValue: DEFAULT_MIN_WEIGHT },
+    { key: 'WEIGHT_RECOVERY_RATE', min: 1, max: 100, defaultValue: DEFAULT_WEIGHT_RECOVERY_RATE },
+    { key: 'FAILURE_WEIGHT_DECREMENT', min: 1, max: 100, defaultValue: DEFAULT_FAILURE_WEIGHT_DECREMENT },
+    { key: 'BACKEND_STALE_THRESHOLD', min: 1000, max: 300000, defaultValue: DEFAULT_BACKEND_STALE_THRESHOLD }
+  ];
+  
+  const errors = [];
+  
+  for (const config of configs) {
+    const value = getConfig(env, config.key, config.defaultValue);
+    
+    if (value < config.min || value > config.max) {
+      errors.push({
+        key: config.key,
+        value: value,
+        message: `值 ${value} 超出范围 (${config.min}-${config.max})`
+      });
+    }
+  }
+  
+  if (errors.length > 0 && requestId) {
+    console.warn(`[${requestId}] 配置验证警告:`, errors);
+  }
+  
+  return errors;
 }
 
 // 获取环境变量中的后端列表
 function getBackendsFromEnv(env) {
   try {
     if (env.BACKEND_URLS) {
-      return JSON.parse(env.BACKEND_URLS);
+      const backends = JSON.parse(env.BACKEND_URLS);
+      
+      // 验证后端URL格式
+      if (Array.isArray(backends)) {
+        return backends.filter(url => {
+          try {
+            new URL(url);
+            return true;
+          } catch {
+            console.warn(`无效的后端URL: ${url}`);
+            return false;
+          }
+        });
+      }
     }
   } catch (error) {
     console.error('解析BACKEND_URLS失败:', error);
@@ -74,7 +156,7 @@ function getBackendsFromEnv(env) {
 }
 
 // KV写入节流检查
-function canWriteKV(key, cooldown = KV_WRITE_COOLDOWN) {
+function canWriteKV(key, cooldown, env) {
   const now = Date.now();
   const lastWriteTime = cache.lastKVWriteTimes.get(key) || 0;
   
@@ -123,7 +205,7 @@ async function getBackendVersion(backendUrl, requestId) {
   
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FAST_CHECK_TIMEOUT);
+    const timeoutId = setTimeout(() => controller.abort(), getConfig({}, 'FAST_CHECK_TIMEOUT', DEFAULT_FAST_CHECK_TIMEOUT));
     
     const response = await fetch(`${backendUrl}/version`, {
       signal: controller.signal,
@@ -166,7 +248,7 @@ function isCacheValid(cacheTimestamp, maxAge, backendUrl = null) {
   // 如果有后端URL，检查后端信息是否过时
   if (backendUrl) {
     const lastSuccess = cache.lastSuccessfulRequests.get(backendUrl) || 0;
-    if (lastSuccess > 0 && now - lastSuccess > BACKEND_STALE_THRESHOLD) {
+    if (lastSuccess > 0 && now - lastSuccess > getConfig({}, 'BACKEND_STALE_THRESHOLD', DEFAULT_BACKEND_STALE_THRESHOLD)) {
       return false; // 后端信息已过时
     }
   }
@@ -175,7 +257,12 @@ function isCacheValid(cacheTimestamp, maxAge, backendUrl = null) {
 }
 
 // 更新后端权重
-function updateBackendWeight(backendUrl, success) {
+function updateBackendWeight(backendUrl, success, env) {
+  const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
+  const MIN_WEIGHT = getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT);
+  const WEIGHT_RECOVERY_RATE = getConfig(env, 'WEIGHT_RECOVERY_RATE', DEFAULT_WEIGHT_RECOVERY_RATE);
+  const FAILURE_WEIGHT_DECREMENT = getConfig(env, 'FAILURE_WEIGHT_DECREMENT', DEFAULT_FAILURE_WEIGHT_DECREMENT);
+  
   let currentWeight = cache.backendWeights.get(backendUrl) || MAX_WEIGHT;
   let failureCount = cache.backendFailureCounts.get(backendUrl) || 0;
   
@@ -209,8 +296,11 @@ function updateBackendWeight(backendUrl, success) {
 }
 
 // 获取加权后端列表
-function getWeightedBackends(backends) {
+function getWeightedBackends(backends, env) {
   const now = Date.now();
+  const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
+  const MIN_WEIGHT = getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT);
+  const BACKEND_STALE_THRESHOLD = getConfig(env, 'BACKEND_STALE_THRESHOLD', DEFAULT_BACKEND_STALE_THRESHOLD);
   
   // 如果加权缓存有效且未过期（10秒），直接返回
   if (cache.weightedBackendCache.length > 0 && 
@@ -266,8 +356,8 @@ function getWeightedBackends(backends) {
 }
 
 // 加权轮询选择后端
-function selectBackendByWeight(backends, requestId) {
-  const weightedBackends = getWeightedBackends(backends);
+function selectBackendByWeight(backends, requestId, env) {
+  const weightedBackends = getWeightedBackends(backends, env);
   
   if (weightedBackends.length === 0) {
     return null;
@@ -285,7 +375,7 @@ function selectBackendByWeight(backends, requestId) {
 }
 
 // 清理过期缓存
-function cleanupExpiredCache() {
+function cleanupExpiredCache(env) {
   const now = Date.now();
   
   // 清理fastHealthChecks缓存（超过10秒）
@@ -342,8 +432,9 @@ async function sendSubconverterRequestNotification(clientIp, backendUrl, backend
   }
   
   try {
-    // 获取北京时间
-    const beijingTime = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    // 获取北京时间（修复时间转换）
+    const now = new Date();
+    const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
     const beijingTimeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
     
     // 如果版本为null，尝试获取版本
@@ -397,10 +488,14 @@ async function sendSubconverterRequestNotification(clientIp, backendUrl, backend
 }
 
 // 极速健康检查（优化版本，只检查最基本功能）
-async function ultraFastHealthCheck(url, requestId) {
+async function ultraFastHealthCheck(url, requestId, env) {
   const cacheKey = `ultrafast_health_${url}`;
   const cached = cache.fastHealthChecks.get(cacheKey);
   const now = Date.now();
+  
+  const FAST_CHECK_TIMEOUT = getConfig(env, 'FAST_CHECK_TIMEOUT', DEFAULT_FAST_CHECK_TIMEOUT);
+  const FAST_CHECK_CACHE_TTL = getConfig(env, 'FAST_CHECK_CACHE_TTL', DEFAULT_FAST_CHECK_CACHE_TTL);
+  const BACKEND_STALE_THRESHOLD = getConfig(env, 'BACKEND_STALE_THRESHOLD', DEFAULT_BACKEND_STALE_THRESHOLD);
   
   // 智能缓存检查
   if (cached && isCacheValid(cached.timestamp, FAST_CHECK_CACHE_TTL, url)) {
@@ -458,14 +553,14 @@ async function ultraFastHealthCheck(url, requestId) {
         }
         
         // 更新后端权重
-        updateBackendWeight(url, true);
+        updateBackendWeight(url, true, env);
       } catch (e) {
         result.version = '未知版本';
-        updateBackendWeight(url, false);
+        updateBackendWeight(url, false, env);
       }
     } else {
       result.version = '未知版本';
-      updateBackendWeight(url, false);
+      updateBackendWeight(url, false, env);
     }
     
     // 缓存极速检查结果
@@ -496,7 +591,7 @@ async function ultraFastHealthCheck(url, requestId) {
     });
     
     // 更新后端权重
-    updateBackendWeight(url, false);
+    updateBackendWeight(url, false, env);
     
     return result;
   }
@@ -557,8 +652,8 @@ async function checkBackendHealth(url, requestId, env) {
   const now = Date.now();
   
   // 获取配置的超时时间
-  const healthCheckTimeout = parseInt(getConfig(env, 'HEALTH_CHECK_TIMEOUT', DEFAULT_HEALTH_CHECK_TIMEOUT));
-  const cacheTtl = parseInt(getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL));
+  const healthCheckTimeout = getConfig(env, 'HEALTH_CHECK_TIMEOUT', DEFAULT_HEALTH_CHECK_TIMEOUT);
+  const cacheTtl = getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL);
   
   // 智能缓存检查
   if (cached && isCacheValid(cached.timestamp, cacheTtl, url)) {
@@ -609,7 +704,7 @@ async function checkBackendHealth(url, requestId, env) {
       }
       
       // 更新后端权重
-      updateBackendWeight(url, healthy);
+      updateBackendWeight(url, healthy, env);
     } else {
       result = { 
         healthy: false, 
@@ -618,7 +713,7 @@ async function checkBackendHealth(url, requestId, env) {
         responseTime,
         version: '未知版本'
       };
-      updateBackendWeight(url, false);
+      updateBackendWeight(url, false, env);
     }
     
     // 缓存结果
@@ -643,7 +738,7 @@ async function checkBackendHealth(url, requestId, env) {
     });
     
     // 更新后端权重
-    updateBackendWeight(url, false);
+    updateBackendWeight(url, false, env);
     
     return result;
   }
@@ -652,7 +747,7 @@ async function checkBackendHealth(url, requestId, env) {
 // 获取后端列表（带缓存）
 async function getBackends(env, requestId) {
   const now = Date.now();
-  const cacheTtl = parseInt(getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL));
+  const cacheTtl = getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL);
   
   // 智能缓存检查
   if (cache.backends && isCacheValid(cache.lastUpdated, cacheTtl)) {
@@ -667,6 +762,7 @@ async function getBackends(env, requestId) {
     cache.lastUpdated = now;
     
     // 初始化后端权重
+    const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
     for (const backend of backends) {
       if (!cache.backendWeights.has(backend)) {
         cache.backendWeights.set(backend, MAX_WEIGHT);
@@ -683,7 +779,7 @@ async function getBackends(env, requestId) {
 // 获取健康状态（带缓存）
 async function getHealthStatus(kv, requestId, env) {
   const now = Date.now();
-  const cacheTtl = parseInt(getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL));
+  const cacheTtl = getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL);
   
   // 智能缓存检查
   if (cache.healthStatus && isCacheValid(cache.healthLastUpdated, cacheTtl)) {
@@ -730,10 +826,12 @@ function hasHealthStatusChanged(oldStatus, newStatus) {
 }
 
 // 保存健康状态（优化：减少写入）
-async function saveHealthStatus(kv, newStatus, requestId) {
+async function saveHealthStatus(kv, newStatus, requestId, env) {
   try {
+    const KV_WRITE_COOLDOWN = getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN);
+    
     // 检查KV写入节流
-    if (!canWriteKV('health_status')) {
+    if (!canWriteKV('health_status', KV_WRITE_COOLDOWN, env)) {
       console.log(`[${requestId}] 健康状态写入被节流，仅更新内存缓存`);
       
       // 只更新内存缓存
@@ -810,10 +908,12 @@ async function getLastAvailableBackend(kv, requestId) {
 }
 
 // 保存上次可用后端（优化：减少写入）
-async function saveLastAvailableBackend(kv, backendUrl, requestId) {
+async function saveLastAvailableBackend(kv, backendUrl, requestId, env) {
   try {
+    const KV_WRITE_COOLDOWN = getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN);
+    
     // 检查KV写入节流
-    if (!canWriteKV('last_available_backend')) {
+    if (!canWriteKV('last_available_backend', KV_WRITE_COOLDOWN, env)) {
       console.log(`[${requestId}] 上次可用后端写入被节流，仅更新内存缓存`);
       cache.lastAvailableBackend = backendUrl;
       return true;
@@ -838,21 +938,41 @@ async function saveLastAvailableBackend(kv, backendUrl, requestId) {
   }
 }
 
-// 并行极速健康检查（优化版本）
-async function parallelUltraFastHealthChecks(urls, requestId) {
+// 并行极速健康检查（优化版本）- 修复并发控制
+async function parallelUltraFastHealthChecks(urls, requestId, env) {
   const results = new Map();
+  const CONCURRENT_HEALTH_CHECKS = getConfig(env, 'CONCURRENT_HEALTH_CHECKS', DEFAULT_CONCURRENT_HEALTH_CHECKS);
   
-  // 使用Promise.allSettled并行检查
-  const promises = urls.map(async (url) => {
+  // 实现真正的并发控制
+  const executeWithConcurrency = async (tasks, maxConcurrent) => {
+    const results = [];
+    const executing = new Set();
+    
+    for (const task of tasks) {
+      // 如果达到最大并发数，等待一个任务完成
+      if (executing.size >= maxConcurrent) {
+        await Promise.race(executing);
+      }
+      
+      const taskPromise = task();
+      executing.add(taskPromise);
+      taskPromise.finally(() => executing.delete(taskPromise));
+      results.push(taskPromise);
+    }
+    
+    return Promise.allSettled(results);
+  };
+  
+  const tasks = urls.map(url => async () => {
     try {
-      const health = await ultraFastHealthCheck(url, `${requestId}-${url}`);
+      const health = await ultraFastHealthCheck(url, `${requestId}-${url}`, env);
       return { url, health };
     } catch (error) {
       return { url, health: { healthy: false, error: error.name, version: '未知版本' } };
     }
   });
   
-  const checkResults = await Promise.allSettled(promises);
+  const checkResults = await executeWithConcurrency(tasks, CONCURRENT_HEALTH_CHECKS);
   
   // 处理结果
   checkResults.forEach(result => {
@@ -876,16 +996,16 @@ async function findAvailableBackendForRequest(kv, requestId, env) {
   const selectionStartTime = Date.now();
   
   // 策略0: 加权轮询选择后端
-  const weightedBackend = selectBackendByWeight(backends, requestId);
+  const weightedBackend = selectBackendByWeight(backends, requestId, env);
   if (weightedBackend) {
     // 快速检查加权选择的后端
-    const fastCheck = await ultraFastHealthCheck(weightedBackend, `${requestId}-weighted-${weightedBackend}`);
+    const fastCheck = await ultraFastHealthCheck(weightedBackend, `${requestId}-weighted-${weightedBackend}`, env);
     if (fastCheck.healthy) {
       console.log(`[${requestId}] 使用加权选择后端: ${weightedBackend}, 响应时间: ${fastCheck.responseTime}ms`);
       
       // 异步更新上次可用后端
       setTimeout(() => {
-        saveLastAvailableBackend(kv, weightedBackend, `${requestId}-async-weighted`);
+        saveLastAvailableBackend(kv, weightedBackend, `${requestId}-async-weighted`, env);
       }, 0);
       
       const selectionTime = Date.now() - selectionStartTime;
@@ -900,13 +1020,13 @@ async function findAvailableBackendForRequest(kv, requestId, env) {
     const candidates = healthyBackends.slice(0, Math.min(3, healthyBackends.length));
     
     for (const candidate of candidates) {
-      const fastCheck = await ultraFastHealthCheck(candidate.url, `${requestId}-cached-${candidate.url}`);
+      const fastCheck = await ultraFastHealthCheck(candidate.url, `${requestId}-cached-${candidate.url}`, env);
       if (fastCheck.healthy) {
         console.log(`[${requestId}] 使用缓存健康后端: ${candidate.url}, 响应时间: ${fastCheck.responseTime}ms`);
         
         // 异步更新上次可用后端
         setTimeout(() => {
-          saveLastAvailableBackend(kv, candidate.url, `${requestId}-async`);
+          saveLastAvailableBackend(kv, candidate.url, `${requestId}-async`, env);
         }, 0);
         
         const selectionTime = Date.now() - selectionStartTime;
@@ -918,7 +1038,7 @@ async function findAvailableBackendForRequest(kv, requestId, env) {
   // 策略2: 检查上次可用的后端（快速路径）
   const lastBackend = cache.lastAvailableBackend;
   if (lastBackend && backends.includes(lastBackend)) {
-    const fastCheck = await ultraFastHealthCheck(lastBackend, requestId);
+    const fastCheck = await ultraFastHealthCheck(lastBackend, requestId, env);
     if (fastCheck.healthy) {
       console.log(`[${requestId}] 使用上次可用后端: ${lastBackend}, 响应时间: ${fastCheck.responseTime}ms`);
       const selectionTime = Date.now() - selectionStartTime;
@@ -929,7 +1049,7 @@ async function findAvailableBackendForRequest(kv, requestId, env) {
   // 策略3: 并行极速检查所有后端
   console.log(`[${requestId}] 并行极速检查 ${backends.length} 个后端`);
   
-  const checkResults = await parallelUltraFastHealthChecks(backends, requestId);
+  const checkResults = await parallelUltraFastHealthChecks(backends, requestId, env);
   
   // 找到响应最快的健康后端
   let fastestBackend = null;
@@ -947,7 +1067,7 @@ async function findAvailableBackendForRequest(kv, requestId, env) {
     
     // 异步保存到KV
     setTimeout(() => {
-      saveLastAvailableBackend(kv, fastestBackend, `${requestId}-async-fastest`);
+      saveLastAvailableBackend(kv, fastestBackend, `${requestId}-async-fastest`, env);
     }, 0);
     
     const selectionTime = Date.now() - selectionStartTime;
@@ -964,7 +1084,7 @@ async function findAvailableBackendForRequest(kv, requestId, env) {
       
       // 异步保存到KV
       setTimeout(() => {
-        saveLastAvailableBackend(kv, url, `${requestId}-async-fallback`);
+        saveLastAvailableBackend(kv, url, `${requestId}-async-fallback`, env);
       }, 0);
       
       const selectionTime = Date.now() - selectionStartTime;
@@ -1021,7 +1141,7 @@ async function handleSubconverterRequest(request, backendUrl, backendSelectionTi
       cache.performanceStats.totalRequests;
     
     // 更新后端权重
-    updateBackendWeight(backendUrl, response.ok);
+    updateBackendWeight(backendUrl, response.ok, env);
     
     // 只复制必要的响应头
     const responseHeaders = new Headers();
@@ -1090,7 +1210,7 @@ async function handleSubconverterRequest(request, backendUrl, backendSelectionTi
     });
     
     // 更新后端权重
-    updateBackendWeight(backendUrl, false);
+    updateBackendWeight(backendUrl, false, env);
     
     throw error;
   }
@@ -1099,9 +1219,29 @@ async function handleSubconverterRequest(request, backendUrl, backendSelectionTi
 // 并发检查多个后端健康状态（优化版本）
 async function concurrentHealthChecks(urls, requestId, env) {
   const results = {};
+  const CONCURRENT_HEALTH_CHECKS = getConfig(env, 'CONCURRENT_HEALTH_CHECKS', DEFAULT_CONCURRENT_HEALTH_CHECKS);
   
-  // 使用并行检查
-  const promises = urls.map(async (url) => {
+  // 实现并发控制
+  const executeWithConcurrency = async (tasks, maxConcurrent) => {
+    const results = [];
+    const executing = new Set();
+    
+    for (const task of tasks) {
+      // 如果达到最大并发数，等待一个任务完成
+      if (executing.size >= maxConcurrent) {
+        await Promise.race(executing);
+      }
+      
+      const taskPromise = task();
+      executing.add(taskPromise);
+      taskPromise.finally(() => executing.delete(taskPromise));
+      results.push(taskPromise);
+    }
+    
+    return Promise.allSettled(results);
+  };
+  
+  const tasks = urls.map(url => async () => {
     try {
       const health = await checkBackendHealth(url, `${requestId}-${url}`, env);
       return { url, health };
@@ -1110,7 +1250,7 @@ async function concurrentHealthChecks(urls, requestId, env) {
     }
   });
   
-  const checkResults = await Promise.allSettled(promises);
+  const checkResults = await executeWithConcurrency(tasks, CONCURRENT_HEALTH_CHECKS);
   
   // 处理结果
   checkResults.forEach(result => {
@@ -1152,10 +1292,10 @@ async function performFullHealthCheck(kv, requestId, env) {
   // 只有在找到健康后端时才尝试保存
   if (fastestBackend) {
     // 保存健康状态（会自动检查是否需要写入KV）
-    await saveHealthStatus(kv, results, requestId);
+    await saveHealthStatus(kv, results, requestId, env);
     
     // 保存最快可用的后端（会自动检查是否需要写入KV）
-    await saveLastAvailableBackend(kv, fastestBackend, requestId);
+    await saveLastAvailableBackend(kv, fastestBackend, requestId, env);
     
     console.log(`[${requestId}] 发现最快后端: ${fastestBackend}, 响应时间: ${fastestTime}ms`);
   } else {
@@ -1223,8 +1363,9 @@ async function sendTelegramNotification(checkResults, requestId, env) {
     
     const status = availableBackend ? '✅ 正常运行' : '🔴 服务异常';
     
-    // 获取北京时间
-    const beijingTime = new Date(new Date(timestamp).getTime() + 8 * 60 * 60 * 1000);
+    // 获取北京时间（修复时间转换）
+    const utcTime = new Date(timestamp);
+    const beijingTime = new Date(utcTime.getTime() + 8 * 60 * 60 * 1000);
     const beijingTimeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
     
     // 创建美观的消息
@@ -1255,6 +1396,7 @@ async function sendTelegramNotification(checkResults, requestId, env) {
       
       for (const url of backends) {
         const result = results[url];
+        const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
         const weight = cache.backendWeights.get(url) || MAX_WEIGHT;
         const failureCount = cache.backendFailureCounts.get(url) || 0;
         const requestCount = cache.requestCounts.get(url) || 0;
@@ -1330,8 +1472,9 @@ async function sendServiceStatusNotification(isAvailable, backendUrl, requestId,
   }
   
   try {
-    // 获取北京时间
-    const beijingTime = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    // 获取北京时间（修复时间转换）
+    const now = new Date();
+    const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
     const beijingTimeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
     
     let message;
@@ -1401,7 +1544,7 @@ async function handleApiRequest(request, env, requestId) {
         backends: backends.map(url => ({
           url,
           health: health[url] || { healthy: null },
-          weight: cache.backendWeights.get(url) || MAX_WEIGHT,
+          weight: cache.backendWeights.get(url) || getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT),
           failure_count: cache.backendFailureCounts.get(url) || 0,
           request_count: cache.requestCounts.get(url) || 0,
           last_success: cache.lastSuccessfulRequests.get(url) || null
@@ -1466,21 +1609,21 @@ async function handleApiRequest(request, env, requestId) {
   if (url.pathname === '/api/config' && request.method === 'GET') {
     try {
       const backends = await getBackends(env, requestId);
-      const cacheTtl = getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL);
-      const healthCheckTimeout = getConfig(env, 'HEALTH_CHECK_TIMEOUT', DEFAULT_HEALTH_CHECK_TIMEOUT);
       
       return new Response(JSON.stringify({ 
         backends,
         config: {
-          cache_ttl: cacheTtl,
-          health_check_timeout: healthCheckTimeout,
-          fast_check_timeout: FAST_CHECK_TIMEOUT,
-          fast_check_cache_ttl: FAST_CHECK_CACHE_TTL,
-          kv_write_cooldown: KV_WRITE_COOLDOWN,
-          max_weight: MAX_WEIGHT,
-          min_weight: MIN_WEIGHT,
-          weight_recovery_rate: WEIGHT_RECOVERY_RATE,
-          failure_weight_decrement: FAILURE_WEIGHT_DECREMENT
+          cache_ttl: getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL),
+          health_check_timeout: getConfig(env, 'HEALTH_CHECK_TIMEOUT', DEFAULT_HEALTH_CHECK_TIMEOUT),
+          concurrent_health_checks: getConfig(env, 'CONCURRENT_HEALTH_CHECKS', DEFAULT_CONCURRENT_HEALTH_CHECKS),
+          fast_check_timeout: getConfig(env, 'FAST_CHECK_TIMEOUT', DEFAULT_FAST_CHECK_TIMEOUT),
+          fast_check_cache_ttl: getConfig(env, 'FAST_CHECK_CACHE_TTL', DEFAULT_FAST_CHECK_CACHE_TTL),
+          kv_write_cooldown: getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN),
+          max_weight: getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT),
+          min_weight: getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT),
+          weight_recovery_rate: getConfig(env, 'WEIGHT_RECOVERY_RATE', DEFAULT_WEIGHT_RECOVERY_RATE),
+          failure_weight_decrement: getConfig(env, 'FAILURE_WEIGHT_DECREMENT', DEFAULT_FAILURE_WEIGHT_DECREMENT),
+          backend_stale_threshold: getConfig(env, 'BACKEND_STALE_THRESHOLD', DEFAULT_BACKEND_STALE_THRESHOLD)
         },
         timestamp: new Date().toISOString()
       }), {
@@ -1497,10 +1640,10 @@ async function handleApiRequest(request, env, requestId) {
     }
   }
   
-  // 清理缓存API
+  // 清理缓存API - 优化缓存重置逻辑
   if (url.pathname === '/api/clear-cache' && request.method === 'POST') {
     try {
-      // 清理内存缓存
+      // 清理内存缓存（修复：重置lastServiceStatus为'unknown'）
       cache = {
         backends: null,
         lastUpdated: 0,
@@ -1516,7 +1659,7 @@ async function handleApiRequest(request, env, requestId) {
         backendVersionCache: new Map(),
         lastKVWriteTimes: new Map(),
         lastHealthNotificationStatus: null,
-        lastServiceStatus: 'available',
+        lastServiceStatus: 'unknown', // 修复：改为'unknown'
         backendWeights: new Map(),
         backendFailureCounts: new Map(),
         lastSuccessfulRequests: new Map(),
@@ -1624,6 +1767,8 @@ async function handleApiRequest(request, env, requestId) {
   // KV写入统计API
   if (url.pathname === '/api/kv-stats' && request.method === 'GET') {
     try {
+      const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
+      
       const stats = {
         last_write_times: Array.from(cache.lastKVWriteTimes.entries()).map(([key, time]) => ({
           key,
@@ -1632,7 +1777,7 @@ async function handleApiRequest(request, env, requestId) {
         })),
         total_writes_saved: cache.lastKVWriteTimes.size,
         optimization_enabled: true,
-        kv_write_cooldown: KV_WRITE_COOLDOWN,
+        kv_write_cooldown: getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN),
         current_service_status: cache.lastServiceStatus,
         backend_weights: Array.from(cache.backendWeights.entries()).map(([url, weight]) => ({
           url,
@@ -1695,6 +1840,7 @@ async function handleApiRequest(request, env, requestId) {
   if (url.pathname === '/api/reset-weights' && request.method === 'POST') {
     try {
       const backends = await getBackends(env, requestId);
+      const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
       
       // 重置所有后端权重
       for (const backend of backends) {
@@ -1734,14 +1880,19 @@ async function handleApiRequest(request, env, requestId) {
 }
 
 // 简单的状态页面
-function createStatusPage(requestId, backends, health, availableBackend) {
+function createStatusPage(requestId, backends, health, availableBackend, env) {
   const healthyCount = Object.values(health).filter(h => h.healthy).length;
   const totalCount = backends.length;
   const status = availableBackend ? '🟢 正常运行' : totalCount > 0 ? '🔴 服务异常' : '⚪ 未配置';
   
-  // 获取北京时间
-  const beijingTime = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  // 获取北京时间（修复时间转换）
+  const now = new Date();
+  const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   const beijingTimeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
+  
+  const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
+  const MIN_WEIGHT = getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT);
+  const KV_WRITE_COOLDOWN = getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN);
   
   const html = `
 <!DOCTYPE html>
@@ -2179,8 +2330,11 @@ export default {
     
     console.log(`[${requestId}] 收到请求: ${request.method} ${url.pathname}`);
     
+    // 验证配置
+    validateConfig(env, requestId);
+    
     // 执行缓存清理
-    cleanupExpiredCache();
+    cleanupExpiredCache(env);
     
     // 更新总请求数
     cache.performanceStats.totalRequests++;
@@ -2193,7 +2347,7 @@ export default {
         const health = await getHealthStatus(kv, requestId, env);
         const availableBackend = await getLastAvailableBackend(kv, requestId);
         
-        return createStatusPage(requestId, backends, health, availableBackend);
+        return createStatusPage(requestId, backends, health, availableBackend, env);
       } catch (error) {
         logError('创建状态页面失败', error, requestId);
         return new Response('服务状态页面暂时不可用', {
@@ -2301,7 +2455,7 @@ export default {
       const checkResults = await performFullHealthCheck(kv, requestId, env);
       
       // 执行缓存清理
-      cleanupExpiredCache();
+      cleanupExpiredCache(env);
       
       // 发送Telegram通知（只在状态变化时）
       const botToken = getConfig(env, 'TG_BOT_TOKEN', '');
