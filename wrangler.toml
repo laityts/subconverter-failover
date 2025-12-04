@@ -37,10 +37,13 @@ FAST_CHECK_CACHE_TTL = "2000"
 # IP通知冷却时间（毫秒，默认5分钟）
 IP_NOTIFICATION_COOLDOWN = "300000"
 
+# KV写入冷却时间（毫秒，默认30秒）- 新增
+KV_WRITE_COOLDOWN = "30000"
+
 # 触发器配置
 [triggers]
-# 每5分钟执行一次（UTC时间）
-crons = ["*/5 * * * *"]
+# 每10分钟执行一次（UTC时间）- 延长间隔以减少KV写入
+crons = ["*/10 * * * *"]
 
 # Observability 配置
 [observability]
