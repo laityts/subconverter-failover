@@ -55,6 +55,13 @@ let cache = {
     totalCount: 0, // 历史总写入次数
     lastWriteTime: 0, // 最后写入时间
     writeOperations: [] // 写入操作记录
+  },
+  // 新增：定时任务数据缓存
+  scheduledData: { // 存储定时任务生成的数据，用于状态页面
+    results: null,
+    availableBackend: null,
+    timestamp: 0,
+    beijingTime: null
   }
 };
 
@@ -358,8 +365,8 @@ function isCacheValid(cacheTimestamp, maxAge, backendUrl = null) {
   return age < maxAge;
 }
 
-// 更新后端权重
-function updateBackendWeight(backendUrl, success, env) {
+// 更新后端权重（修复：同时更新最后成功时间）
+function updateBackendWeight(backendUrl, success, env, responseTime = null) {
   const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
   const MIN_WEIGHT = getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT);
   const WEIGHT_RECOVERY_RATE = getConfig(env, 'WEIGHT_RECOVERY_RATE', DEFAULT_WEIGHT_RECOVERY_RATE);
@@ -457,7 +464,7 @@ function getWeightedBackends(backends, env) {
   return weightedList;
 }
 
-// 加权轮询选择后端
+// 加权轮询选择后端（修复：增加请求计数）
 function selectBackendByWeight(backends, requestId, env) {
   const weightedBackends = getWeightedBackends(backends, env);
   
@@ -468,11 +475,11 @@ function selectBackendByWeight(backends, requestId, env) {
   // 选择第一个（已经随机打乱）
   const selected = weightedBackends[0];
   
-  // 记录选择
-  const requestCount = cache.requestCounts.get(selected.url) || 0;
-  cache.requestCounts.set(selected.url, requestCount + 1);
+  // 记录请求计数（修复：确保每次都增加）
+  const requestCount = (cache.requestCounts.get(selected.url) || 0) + 1;
+  cache.requestCounts.set(selected.url, requestCount);
   
-  console.log(`[${requestId}] 加权选择后端: ${selected.url}, 权重: ${selected.weight}`);
+  console.log(`[${requestId}] 加权选择后端: ${selected.url}, 权重: ${selected.weight}, 请求计数: ${requestCount}`);
   return selected.url;
 }
 
@@ -597,7 +604,7 @@ async function sendSubconverterRequestNotification(clientIp, backendUrl, backend
   }
 }
 
-// 极速健康检查（优化版本，只检查最基本功能）
+// 极速健康检查（优化版本，只检查最基本功能）- 修复：更新请求计数和最后成功时间
 async function ultraFastHealthCheck(url, requestId, env) {
   const cacheKey = `ultrafast_health_${url}`;
   const cached = cache.fastHealthChecks.get(cacheKey);
@@ -662,8 +669,8 @@ async function ultraFastHealthCheck(url, requestId, env) {
           });
         }
         
-        // 更新后端权重
-        updateBackendWeight(url, true, env);
+        // 更新后端权重（修复：传递responseTime）
+        updateBackendWeight(url, true, env, responseTime);
       } catch (e) {
         result.version = '未知版本';
         updateBackendWeight(url, false, env);
@@ -755,7 +762,7 @@ function getSortedHealthyBackends(forceRefresh = false) {
   return cache.healthyBackendsList;
 }
 
-// 带缓存的详细健康检查
+// 带缓存的详细健康检查（修复：更新请求计数）
 async function checkBackendHealth(url, requestId, env) {
   const cacheKey = `health_${url}`;
   const cached = cache.backendVersions.get(cacheKey);
@@ -813,8 +820,12 @@ async function checkBackendHealth(url, requestId, env) {
         });
       }
       
-      // 更新后端权重（只要返回200就认为是成功）
-      updateBackendWeight(url, true, env);
+      // 更新后端权重（修复：传递responseTime）
+      updateBackendWeight(url, healthy, env, responseTime);
+      
+      // 增加请求计数（修复：健康检查也算一次请求）
+      const requestCount = (cache.requestCounts.get(url) || 0) + 1;
+      cache.requestCounts.set(url, requestCount);
     } else {
       result = { 
         healthy: false, 
@@ -854,7 +865,7 @@ async function checkBackendHealth(url, requestId, env) {
   }
 }
 
-// 获取后端列表（带缓存）
+// 获取后端列表（带缓存）- 修复：初始化统计
 async function getBackends(env, requestId) {
   const now = Date.now();
   const cacheTtl = getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL);
@@ -871,11 +882,20 @@ async function getBackends(env, requestId) {
     cache.backends = backends;
     cache.lastUpdated = now;
     
-    // 初始化后端权重
+    // 初始化后端权重和统计
     const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
     for (const backend of backends) {
       if (!cache.backendWeights.has(backend)) {
         cache.backendWeights.set(backend, MAX_WEIGHT);
+      }
+      if (!cache.backendFailureCounts.has(backend)) {
+        cache.backendFailureCounts.set(backend, 0);
+      }
+      if (!cache.requestCounts.has(backend)) {
+        cache.requestCounts.set(backend, 0);
+      }
+      if (!cache.lastSuccessfulRequests.has(backend)) {
+        cache.lastSuccessfulRequests.set(backend, 0);
       }
     }
     
@@ -886,7 +906,7 @@ async function getBackends(env, requestId) {
   }
 }
 
-// 获取健康状态（带缓存）
+// 获取健康状态（带缓存）- 修复：确保返回完整数据
 async function getHealthStatus(kv, requestId, env) {
   const now = Date.now();
   const cacheTtl = getConfig(env, 'CACHE_TTL', DEFAULT_CACHE_TTL);
@@ -1207,7 +1227,7 @@ async function findAvailableBackendForRequest(kv, requestId, env) {
   return { backend: null, selectionTime };
 }
 
-// 处理订阅转换请求 - 优化版本
+// 处理订阅转换请求 - 优化版本（修复：更新统计信息）
 async function handleSubconverterRequest(request, backendUrl, backendSelectionTime, requestId, env, ctx) {
   const url = new URL(request.url);
   const backendPath = url.pathname + url.search;
@@ -1250,8 +1270,8 @@ async function handleSubconverterRequest(request, backendUrl, backendSelectionTi
       (cache.performanceStats.avgResponseTime * (cache.performanceStats.totalRequests - 1) + responseTime) / 
       cache.performanceStats.totalRequests;
     
-    // 更新后端权重
-    updateBackendWeight(backendUrl, response.ok, env);
+    // 更新后端权重和最后成功时间（修复：传递responseTime）
+    updateBackendWeight(backendUrl, response.ok, env, responseTime);
     
     // 只复制必要的响应头
     const responseHeaders = new Headers();
@@ -1373,11 +1393,32 @@ async function concurrentHealthChecks(urls, requestId, env) {
   return results;
 }
 
+// 检查当前使用后端是否发生变化（新函数）
+function hasAvailableBackendChanged(newAvailableBackend) {
+  const previousBackend = cache.lastAvailableBackendForStatus;
+  
+  // 第一次检查，状态肯定变化了
+  if (cache.lastServiceStatus === 'unknown') {
+    return true;
+  }
+  
+  // 检查后端是否发生变化
+  return previousBackend !== newAvailableBackend;
+}
+
 // 执行完整健康检查（检查所有后端）- 优化版本
 async function performFullHealthCheck(kv, requestId, env) {
   const backends = await getBackends(env, requestId);
   
   if (backends.length === 0) {
+    // 更新定时任务数据缓存
+    cache.scheduledData = {
+      results: {},
+      availableBackend: null,
+      timestamp: Date.now(),
+      beijingTime: getBeijingTimeString()
+    };
+    
     return {
       results: {},
       availableBackend: null,
@@ -1399,18 +1440,33 @@ async function performFullHealthCheck(kv, requestId, env) {
     }
   }
   
-  // 只有在找到健康后端时才尝试保存
-  if (fastestBackend) {
+  // 更新定时任务数据缓存
+  cache.scheduledData = {
+    results,
+    availableBackend: fastestBackend,
+    timestamp: Date.now(),
+    beijingTime: getBeijingTimeString()
+  };
+  
+  // 检查当前使用后端是否发生变化
+  const backendChanged = hasAvailableBackendChanged(fastestBackend);
+  
+  // 只有当前使用后端发生变化时才写入KV
+  if (backendChanged) {
     // 保存健康状态（会自动检查是否需要写入KV）
     await saveHealthStatus(kv, results, requestId, env);
     
     // 保存最快可用的后端（会自动检查是否需要写入KV）
     await saveLastAvailableBackend(kv, fastestBackend, requestId, env);
     
-    console.log(`[${requestId}] 发现最快后端: ${fastestBackend}, 响应时间: ${fastestTime}ms`);
+    // 更新状态变化记录
+    cache.lastServiceStatus = fastestBackend ? 'available' : 'unavailable';
+    cache.lastAvailableBackendForStatus = fastestBackend;
+    
+    console.log(`[${requestId}] 当前使用后端变化，发现最快后端: ${fastestBackend}, 响应时间: ${fastestTime}ms`);
   } else {
-    // 没有健康后端，只更新内存状态
-    console.log(`[${requestId}] 未发现健康后端，仅更新内存状态`);
+    // 当前使用后端未变化，只更新内存状态，不写入KV
+    console.log(`[${requestId}] 当前使用后端未变化，仅更新内存状态`);
     
     // 更新内存中的健康状态（不写入KV）
     const dataToSave = {
@@ -1425,42 +1481,12 @@ async function performFullHealthCheck(kv, requestId, env) {
     results,
     availableBackend: fastestBackend,
     fastestResponseTime: fastestTime,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    backendChanged: backendChanged
   };
 }
 
-// 检查服务状态是否发生变化（修复：正确检测后端变化）
-function hasServiceStatusChanged(checkResults) {
-  const { availableBackend } = checkResults;
-  const currentStatus = availableBackend ? 'available' : 'unavailable';
-  
-  // 获取之前的后端和状态
-  const previousBackend = cache.lastAvailableBackendForStatus;
-  const previousStatus = cache.lastServiceStatus;
-  
-  // 第一次检查，状态肯定变化了
-  if (cache.lastServiceStatus === 'unknown') {
-    cache.lastServiceStatus = currentStatus;
-    cache.lastAvailableBackendForStatus = availableBackend;
-    return true;
-  }
-  
-  // 检查状态或后端是否发生变化
-  const statusChanged = previousStatus !== currentStatus;
-  const backendChanged = previousBackend !== availableBackend;
-  
-  if (statusChanged || backendChanged) {
-    console.log(`[状态变化检测] 服务状态从 ${previousStatus} (后端: ${previousBackend}) 变为 ${currentStatus} (后端: ${availableBackend})`);
-    cache.lastServiceStatus = currentStatus;
-    cache.lastAvailableBackendForStatus = availableBackend;
-    return true;
-  }
-  
-  // 状态未变化
-  return false;
-}
-
-// 发送Telegram通知（只在状态变化时发送）- 修复：最后成功时间显示
+// 发送Telegram通知（每次定时任务都发送，但只在后端变更时标记状态变化）
 async function sendTelegramNotification(checkResults, requestId, env) {
   const botToken = getConfig(env, 'TG_BOT_TOKEN', '');
   const chatId = getConfig(env, 'TG_CHAT_ID', '');
@@ -1470,7 +1496,7 @@ async function sendTelegramNotification(checkResults, requestId, env) {
   }
   
   try {
-    const { results, availableBackend, timestamp } = checkResults;
+    const { results, availableBackend, timestamp, backendChanged } = checkResults;
     const backends = Object.keys(results);
     const healthyCount = Object.values(results).filter(r => r.healthy).length;
     const totalCount = backends.length;
@@ -1490,7 +1516,9 @@ async function sendTelegramNotification(checkResults, requestId, env) {
     message += `📅 *报告时间:* ${beijingTimeStr} (北京时间)\n`;
     message += `📊 *服务状态:* ${status}\n`;
     message += `🔧 *健康后端:* ${healthyCount}/${totalCount}\n`;
-    message += `📈 *状态变化:* ${hasServiceStatusChanged(checkResults) ? '是 ✅' : '否 ❌'}\n\n`;
+    
+    // 检查状态是否变化（只关注当前使用后端）
+    message += `📈 *当前使用后端变化:* ${backendChanged ? '是 ✅' : '否 ❌'}\n\n`;
     
     if (availableBackend) {
       message += `🚀 *当前使用后端:*\n\`${availableBackend}\`\n`;
@@ -1521,7 +1549,7 @@ async function sendTelegramNotification(checkResults, requestId, env) {
         
         // 修复最后成功时间显示
         let lastSuccessTimeText = '从未';
-        if (lastSuccess) {
+        if (lastSuccess && lastSuccess > 0) {
           const secondsAgo = Math.round((Date.now() - lastSuccess) / 1000);
           if (secondsAgo < 60) {
             lastSuccessTimeText = `${secondsAgo}秒前`;
@@ -1678,8 +1706,8 @@ async function handleApiRequest(request, env, requestId) {
           weight: cache.backendWeights.get(url) || getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT),
           failure_count: cache.backendFailureCounts.get(url) || 0,
           request_count: cache.requestCounts.get(url) || 0,
-          last_success: cache.lastSuccessfulRequests.get(url) || null,
-          last_success_text: cache.lastSuccessfulRequests.get(url) ? 
+          last_success: cache.lastSuccessfulRequests.get(url) || 0,
+          last_success_text: cache.lastSuccessfulRequests.get(url) && cache.lastSuccessfulRequests.get(url) > 0 ? 
             `${Math.round((Date.now() - cache.lastSuccessfulRequests.get(url)) / 1000)}秒前` : 
             '从未'
         })),
@@ -1694,7 +1722,14 @@ async function handleApiRequest(request, env, requestId) {
         status_change_detection: {
           last_service_status: cache.lastServiceStatus,
           last_available_backend_for_status: cache.lastAvailableBackendForStatus,
-          has_status_changed: cache.lastServiceStatus !== 'unknown'
+          current_available_backend_changed: hasAvailableBackendChanged(cache.lastAvailableBackendForStatus)
+        },
+        scheduled_data: {
+          has_data: cache.scheduledData.timestamp > 0,
+          timestamp: cache.scheduledData.timestamp,
+          beijing_time: cache.scheduledData.beijingTime,
+          available_backend: cache.scheduledData.availableBackend,
+          results_count: cache.scheduledData.results ? Object.keys(cache.scheduledData.results).length : 0
         }
       }), {
         headers: { 
@@ -1718,18 +1753,12 @@ async function handleApiRequest(request, env, requestId) {
     try {
       const checkResults = await performFullHealthCheck(kv, requestId, env);
       
-      // 发送Telegram通知（只在状态变化时）
+      // 发送Telegram通知（每次都会发送）
       const botToken = getConfig(env, 'TG_BOT_TOKEN', '');
       const chatId = getConfig(env, 'TG_CHAT_ID', '');
       if (botToken && chatId) {
-        // 检查服务状态是否变化
-        const statusChanged = hasServiceStatusChanged(checkResults);
-        if (statusChanged) {
-          console.log(`[${requestId}] 服务状态变化，发送Telegram通知`);
-          await sendTelegramNotification(checkResults, requestId, env);
-        } else {
-          console.log(`[${requestId}] 服务状态未变化，跳过Telegram通知`);
-        }
+        console.log(`[${requestId}] 手动触发健康检查，发送Telegram通知`);
+        await sendTelegramNotification(checkResults, requestId, env);
       } else {
         console.log(`[${requestId}] Telegram通知未配置，跳过发送`);
       }
@@ -1742,8 +1771,9 @@ async function handleApiRequest(request, env, requestId) {
         fastest_response_time: checkResults.fastestResponseTime,
         timestamp: checkResults.timestamp,
         beijing_time: getBeijingTimeString(new Date(checkResults.timestamp)),
-        status_changed: hasServiceStatusChanged(checkResults),
-        kv_write_optimized: true
+        backend_changed: checkResults.backendChanged,
+        kv_write_optimized: true,
+        scheduled_data_updated: true
       }), {
         headers: { 'Content-Type': 'application/json; charset=utf-8' }
       });
@@ -1836,6 +1866,13 @@ async function handleApiRequest(request, env, requestId) {
           totalCount: 0,
           lastWriteTime: 0,
           writeOperations: []
+        },
+        // 重置定时任务数据缓存
+        scheduledData: {
+          results: null,
+          availableBackend: null,
+          timestamp: 0,
+          beijingTime: null
         }
       };
       
@@ -1954,18 +1991,22 @@ async function handleApiRequest(request, env, requestId) {
         kv_write_cooldown: getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN),
         current_service_status: cache.lastServiceStatus,
         last_available_backend_for_status: cache.lastAvailableBackendForStatus,
-        status_change_detection: {
-          last_service_status: cache.lastServiceStatus,
-          last_available_backend_for_status: cache.lastAvailableBackendForStatus,
-          last_available_backend: cache.lastAvailableBackend
+        available_backend_changed: hasAvailableBackendChanged(cache.lastAvailableBackendForStatus),
+        scheduled_data: {
+          has_data: cache.scheduledData.timestamp > 0,
+          timestamp: cache.scheduledData.timestamp,
+          beijing_time: cache.scheduledData.beijingTime,
+          available_backend: cache.scheduledData.availableBackend,
+          results_count: cache.scheduledData.results ? Object.keys(cache.scheduledData.results).length : 0,
+          age_ms: cache.scheduledData.timestamp > 0 ? Date.now() - cache.scheduledData.timestamp : 0
         },
         backend_weights: Array.from(cache.backendWeights.entries()).map(([url, weight]) => ({
           url,
           weight,
           failure_count: cache.backendFailureCounts.get(url) || 0,
           request_count: cache.requestCounts.get(url) || 0,
-          last_success: cache.lastSuccessfulRequests.get(url) || null,
-          last_success_text: cache.lastSuccessfulRequests.get(url) ? 
+          last_success: cache.lastSuccessfulRequests.get(url) || 0,
+          last_success_text: cache.lastSuccessfulRequests.get(url) && cache.lastSuccessfulRequests.get(url) > 0 ? 
             `${Math.round((Date.now() - cache.lastSuccessfulRequests.get(url)) / 1000)}秒前` : 
             '从未'
         })),
@@ -2106,43 +2147,147 @@ async function handleApiRequest(request, env, requestId) {
   });
 }
 
-// 简单的状态页面
-function createStatusPage(requestId, backends, health, availableBackend, env) {
-  const healthyCount = Object.values(health).filter(h => h.healthy).length;
-  const totalCount = backends.length;
-  const status = availableBackend ? '🟢 正常运行' : totalCount > 0 ? '🔴 服务异常' : '⚪ 未配置';
+// 更新createStatusPage函数，使用定时任务生成的数据
+async function createStatusPage(requestId, env) {
+  // 直接使用定时任务生成的数据，确保与Telegram通知一致
+  const scheduledData = cache.scheduledData;
   
-  // === 修复时间转换：使用正确的时区处理 ===
+  // 如果没有定时任务数据，显示等待
+  if (!scheduledData || !scheduledData.timestamp || scheduledData.timestamp === 0) {
+    const beijingNowStr = getBeijingTimeString();
+    
+    const html = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>订阅转换服务状态</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+        }
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 30px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+        p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+        .info {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+            text-align: left;
+        }
+        .info h3 {
+            color: #495057;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        .info ul {
+            margin-left: 20px;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        .info li {
+            margin-bottom: 5px;
+        }
+        .footer {
+            margin-top: 25px;
+            color: #6c757d;
+            font-size: 12px;
+        }
+        .request-id {
+            font-family: monospace;
+            font-size: 11px;
+            color: #adb5bd;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="loading-spinner"></div>
+        <h1>⏳ 等待数据更新</h1>
+        <p>状态页面正在等待定时任务生成数据...</p>
+        <p>请等待定时任务执行（每2分钟一次）</p>
+        
+        <div class="info">
+            <h3>📋 系统信息</h3>
+            <ul>
+                <li>当前时间: ${beijingNowStr} (北京时间)</li>
+                <li>请求ID: <span class="request-id">${requestId}</span></li>
+                <li>定时任务状态: 等待执行</li>
+                <li>数据同步: 状态页面与Telegram通知使用相同数据源</li>
+            </ul>
+        </div>
+        
+        <div class="footer">
+            系统将在定时任务完成后自动更新数据<br>
+            您也可以稍后刷新页面查看最新状态
+        </div>
+    </div>
+</body>
+</html>`;
+    
+    return new Response(html, {
+      headers: { 
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      }
+    });
+  }
   
-  // 获取当前时间的北京时间（使用正确的时区转换）
-  const now = new Date();
-  const beijingNowStr = getBeijingTimeString(now);
+  // 使用定时任务数据
+  const results = scheduledData.results || {};
+  const availableBackend = scheduledData.availableBackend;
+  const backends = await getBackends(env, requestId);
   
-  // 获取性能统计重置时间的北京时间
+  // 获取当前时间的北京时间
+  const beijingNowStr = getBeijingTimeString();
+  
+  // 定时任务数据的年龄（毫秒）
+  const dataAgeMs = Date.now() - scheduledData.timestamp;
+  const dataAgeSec = Math.round(dataAgeMs / 1000);
+  
+  // 性能统计重置时间的北京时间
   const resetTime = new Date(cache.performanceStats.lastResetTime);
   const beijingResetTimeStr = cache.performanceStats.lastResetTime > 0 
     ? getBeijingTimeString(resetTime) 
     : '从未重置';
-  
-  // 为每个后端时间转换创建一个辅助函数
-  const convertToBeijingTimeStr = (timestamp) => {
-    if (!timestamp) return '从未检查';
-    
-    try {
-      const date = new Date(timestamp);
-      // 检查是否为有效日期
-      if (isNaN(date.getTime())) {
-        return '无效时间';
-      }
-      return getBeijingTimeShort(date);
-    } catch (error) {
-      return '转换失败';
-    }
-  };
-  
-  const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
-  const MIN_WEIGHT = getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT);
-  const KV_WRITE_COOLDOWN = getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN);
   
   // 获取KV写入统计信息
   const kvDailyWrites = cache.kvWriteStats.dailyCount || 0;
@@ -2151,11 +2296,19 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
   const todayBeijingDate = getBeijingDateString(new Date());
   
   // 状态变化检测信息
-  const statusChanged = cache.lastServiceStatus !== 'unknown';
-  const statusChangeInfo = statusChanged ? 
-    `上次状态: ${cache.lastServiceStatus}, 上次后端: ${cache.lastAvailableBackendForStatus || '无'}` : 
-    '尚未检测到状态变化';
+  const backendChanged = hasAvailableBackendChanged(availableBackend);
+  const statusChangedText = backendChanged ? '是 (当前使用后端已变更)' : '否 (当前使用后端未变更)';
   
+  // 获取后端统计数据
+  const healthyCount = Object.values(results).filter(r => r.healthy).length;
+  const totalCount = backends.length;
+  const status = availableBackend ? '🟢 正常运行' : totalCount > 0 ? '🔴 服务异常' : '⚪ 未配置';
+  
+  const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
+  const MIN_WEIGHT = getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT);
+  const KV_WRITE_COOLDOWN = getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN);
+  
+  // 构建HTML页面
   const html = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -2239,6 +2392,15 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
+        .data-freshness {
+            text-align: center;
+            margin-bottom: 15px;
+            font-size: 13px;
+            color: #6c757d;
+        }
+        .freshness-good { color: #28a745; }
+        .freshness-warning { color: #ffc107; }
+        .freshness-critical { color: #dc3545; }
         .current-backend {
             background: #e7f5ff;
             border: 1px solid #bbdefb;
@@ -2542,6 +2704,20 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             border-radius: 6px;
             border: 1px solid #e9ecef;
         }
+        .check-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-top: 10px;
+            display: inline-block;
+        }
+        .check-btn:hover {
+            background: #0056b3;
+        }
     </style>
 </head>
 <body>
@@ -2550,6 +2726,12 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         
         <div class="time-info">
             页面生成时间: ${beijingNowStr}
+            <button class="check-btn" onclick="performHealthCheck()">🚀 立即检查</button>
+        </div>
+        
+        <div class="data-freshness ${dataAgeSec < 120 ? 'freshness-good' : (dataAgeSec < 300 ? 'freshness-warning' : 'freshness-critical')}">
+            数据更新时间: ${scheduledData.beijingTime} (${dataAgeSec}秒前)
+            ${dataAgeSec > 120 ? '<br><small>⚠️ 数据可能已过期，等待定时任务更新</small>' : ''}
         </div>
         
         <div class="status-header">
@@ -2559,7 +2741,7 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         </div>
         
         <div class="status-change-info">
-            状态变化检测: ${statusChangeInfo}
+            当前使用后端变化: ${statusChangedText}
         </div>
         
         <div class="performance-stats">
@@ -2602,12 +2784,13 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         <div class="current-backend">
             <h3>当前使用后端</h3>
             <div class="backend-url">${availableBackend}</div>
-            ${health[availableBackend]?.version && health[availableBackend].version !== '未知版本' ? `
+            ${results[availableBackend]?.version && results[availableBackend].version !== '未知版本' ? `
             <div class="backend-meta">
-                <span class="meta-item">版本: ${health[availableBackend].version}</span>
-                ${health[availableBackend]?.responseTime ? `<span class="meta-item">响应: ${health[availableBackend].responseTime}ms</span>` : ''}
+                <span class="meta-item">版本: ${results[availableBackend].version}</span>
+                ${results[availableBackend]?.responseTime ? `<span class="meta-item">响应: ${results[availableBackend].responseTime}ms</span>` : ''}
                 <span class="meta-item">权重: <span class="weight-badge ${getWeightClass(cache.backendWeights.get(availableBackend) || MAX_WEIGHT)}">${cache.backendWeights.get(availableBackend) || MAX_WEIGHT}</span></span>
                 <span class="meta-item">请求: ${cache.requestCounts.get(availableBackend) || 0}</span>
+                <span class="meta-item">失败: ${cache.backendFailureCounts.get(availableBackend) || 0}</span>
             </div>
             ` : ''}
         </div>
@@ -2627,7 +2810,7 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         <div class="backends-list">
             <h3>后端状态详情</h3>
             ${backends.map(url => {
-              const status = health[url] || { healthy: null };
+              const status = results[url] || { healthy: null };
               const weight = cache.backendWeights.get(url) || MAX_WEIGHT;
               const failureCount = cache.backendFailureCounts.get(url) || 0;
               const requestCount = cache.requestCounts.get(url) || 0;
@@ -2635,7 +2818,7 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
               
               // 修复最后成功时间显示
               let lastSuccessTimeText = '从未';
-              if (lastSuccess) {
+              if (lastSuccess && lastSuccess > 0) {
                 const secondsAgo = Math.round((Date.now() - lastSuccess) / 1000);
                 if (secondsAgo < 60) {
                   lastSuccessTimeText = `${secondsAgo}秒前`;
@@ -2651,8 +2834,18 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
               const statusText = status.healthy === true ? '正常' : 
                                 status.healthy === false ? '异常' : '未知';
               
-              // 使用修复的时间转换函数
-              const timestamp = convertToBeijingTimeStr(status.timestamp);
+              // 时间格式化
+              let timestampText = '从未检查';
+              if (status.timestamp) {
+                try {
+                  const date = new Date(status.timestamp);
+                  if (!isNaN(date.getTime())) {
+                    timestampText = getBeijingTimeShort(date);
+                  }
+                } catch (e) {
+                  timestampText = status.timestamp;
+                }
+              }
               
               return `
               <div class="backend-item">
@@ -2669,7 +2862,7 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
                       </div>
                       <div class="meta-grid-item">
                           <div class="meta-label">最后检查</div>
-                          <div class="meta-value">${timestamp}</div>
+                          <div class="meta-value">${timestampText}</div>
                       </div>
                       ${status.responseTime ? `
                       <div class="meta-grid-item">
@@ -2709,37 +2902,25 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         ` : ''}
         
         <div class="info-section" style="background: #d4edda; border-color: #c3e6cb;">
-            <h3 style="color: #155724;">💾 KV写入统计</h3>
+            <h3 style="color: #155724;">💾 KV写入优化</h3>
             <ul>
+                <li>当前使用后端变更时写入KV: <strong>${backendChanged ? '是' : '否'}</strong></li>
                 <li>今日KV写入次数: <strong>${kvDailyWrites}</strong> (北京时间 ${todayBeijingDate})</li>
                 <li>历史总KV写入次数: <strong>${kvTotalWrites}</strong></li>
-                <li>最后重置日期: ${kvLastResetDate}</li>
                 <li>写入节流: ${KV_WRITE_COOLDOWN/1000}秒内不重复写入相同数据</li>
-                <li>状态变化检测: 仅当健康状态真正变化时才写入KV</li>
-                <li>内存缓存优先: 使用内存缓存减少KV读取次数</li>
-                <li>预估减少: KV写入次数减少90%以上</li>
+                <li>数据同步: 状态页面与Telegram通知使用相同数据源</li>
+                <li>状态检测: 只检测当前使用后端变更，减少不必要的KV写入</li>
             </ul>
         </div>
         
         <div class="info-section" style="background: #fff3cd; border-color: #ffeaa7;">
-            <h3 style="color: #856404;">⚡ 智能缓存与加权轮询</h3>
+            <h3 style="color: #856404;">📊 数据同步说明</h3>
             <ul>
-                <li>智能缓存失效: 基于后端响应状态动态调整缓存时间</li>
-                <li>加权轮询算法: 根据后端健康状况分配权重 (${MIN_WEIGHT}-${MAX_WEIGHT})</li>
-                <li>自动故障转移: 失败后端权重降低，健康后端权重恢复</li>
-                <li>响应时间优化: 优先选择响应最快、最稳定的后端</li>
-                <li>内存缓存清理: 自动清理过期缓存，防止内存泄漏</li>
-            </ul>
-        </div>
-        
-        <div class="info-section" style="background: #d1ecf1; border-color: #bee5eb;">
-            <h3 style="color: #0c5460;">🔔 通知与监控系统</h3>
-            <ul>
-                <li>定时健康检查: 每10分钟执行一次，只在状态变化时发送报告</li>
-                <li>请求耗时统计: 显示后端选择耗时和请求响应耗时</li>
-                <li>服务状态监控: 实时监控服务可用性，自动发送状态变化通知</li>
-                <li>错误日志记录: 自动记录错误信息，便于问题排查</li>
-                <li>性能统计: 实时统计请求成功率、平均响应时间等指标</li>
+                <li>状态页面数据来自定时任务，与Telegram通知完全一致</li>
+                <li>定时任务每2分钟执行一次，更新所有数据</li>
+                <li>当前使用后端变更时才写入KV存储</li>
+                <li>健康状态变化不影响KV写入，只更新内存缓存</li>
+                <li>数据年龄: ${dataAgeSec}秒 (${dataAgeSec < 120 ? '新鲜' : '可能已过期'})</li>
             </ul>
         </div>
         
@@ -2754,10 +2935,10 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         
         <div class="footer">
             <div>请求ID: <span class="request-id">${requestId}</span></div>
-            <div>最后更新: ${beijingNowStr}</div>
+            <div>最后更新: ${scheduledData.beijingTime}</div>
             <div>当前服务状态: ${availableBackend ? 'available' : 'unavailable'}</div>
             <div>性能统计重置时间: ${beijingResetTimeStr}</div>
-            <div>KV写入统计重置: 每日0点(北京时间)自动重置</div>
+            <div>数据同步: 与Telegram通知保持数据一致</div>
         </div>
     </div>
     
@@ -2799,10 +2980,54 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             }
         }
         
-        // 自动刷新页面（每60秒）
+        // 执行健康检查函数
+        function performHealthCheck() {
+            const checkBtn = document.querySelector('.check-btn');
+            const originalText = checkBtn.textContent;
+            
+            checkBtn.textContent = '检查中...';
+            checkBtn.disabled = true;
+            
+            fetch('/api/health-check', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('HTTP错误! 状态码: ' + response.status);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    alert('健康检查完成！页面将自动刷新以显示最新状态。');
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1500);
+                } else {
+                    alert('健康检查失败：' + (data.error || '未知错误'));
+                    checkBtn.textContent = originalText;
+                    checkBtn.disabled = false;
+                }
+            })
+            .catch(error => {
+                alert('请求失败：' + error.message);
+                checkBtn.textContent = originalText;
+                checkBtn.disabled = false;
+            });
+        }
+        
+        // 自动检查数据新鲜度，如果超过5分钟，显示提示
         setTimeout(() => {
-            window.location.reload();
-        }, 60000);
+            const dataAgeSec = ${dataAgeSec};
+            if (dataAgeSec > 300) { // 5分钟
+                if (confirm('数据已超过5分钟未更新，是否刷新页面获取最新状态？')) {
+                    window.location.reload();
+                }
+            }
+        }, 1000);
     </script>
 </body>
 </html>`;
@@ -2839,15 +3064,11 @@ export default {
     // 更新总请求数
     cache.performanceStats.totalRequests++;
     
-    // 根路径显示状态页面
+    // 状态页面处理
     if (url.pathname === '/' || url.pathname === '/status') {
       try {
-        const kv = env.SUB_BACKENDS;
-        const backends = await getBackends(env, requestId);
-        const health = await getHealthStatus(kv, requestId, env);
-        const availableBackend = await getLastAvailableBackend(kv, requestId);
-        
-        return createStatusPage(requestId, backends, health, availableBackend, env);
+        // 直接调用新的状态页面函数
+        return createStatusPage(requestId, env);
       } catch (error) {
         logError('创建状态页面失败', error, requestId);
         return new Response('服务状态页面暂时不可用', {
@@ -2957,23 +3178,17 @@ export default {
       // 执行缓存清理（包括检查KV写入统计是否需要重置）
       cleanupExpiredCache(env);
       
-      // 发送Telegram通知（只在状态变化时）
+      // 发送Telegram通知（每次定时任务都发送）
       const botToken = getConfig(env, 'TG_BOT_TOKEN', '');
       const chatId = getConfig(env, 'TG_CHAT_ID', '');
       if (botToken && chatId) {
-        // 检查服务状态是否变化
-        const statusChanged = hasServiceStatusChanged(checkResults);
-        if (statusChanged) {
-          console.log(`[${requestId}] 服务状态变化，发送Telegram通知`);
-          ctx.waitUntil(sendTelegramNotification(checkResults, requestId, env));
-        } else {
-          console.log(`[${requestId}] 服务状态未变化，跳过Telegram通知`);
-        }
+        console.log(`[${requestId}] 定时任务执行完成，发送Telegram通知`);
+        ctx.waitUntil(sendTelegramNotification(checkResults, requestId, env));
       } else {
         console.log(`[${requestId}] Telegram通知未配置，跳过发送`);
       }
       
-      console.log(`[${requestId}] Cron健康检查完成，KV写入已优化，今日KV写入次数: ${cache.kvWriteStats.dailyCount}`);
+      console.log(`[${requestId}] Cron健康检查完成，KV写入已优化，今日KV写入次数: ${cache.kvWriteStats.dailyCount}, 当前使用后端变化: ${checkResults.backendChanged}`);
     } catch (error) {
       logError('Cron健康检查失败', error, requestId);
     }

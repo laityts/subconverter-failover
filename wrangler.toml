@@ -45,8 +45,8 @@ BACKEND_STALE_THRESHOLD = "30000"
 
 # 触发器配置
 [triggers]
-# 每5分钟执行一次（UTC时间）- 延长间隔以减少KV写入
-crons = ["*/5 * * * *"]
+# 每2分钟执行一次（UTC时间）
+crons = ["*/2 * * * *"]
 
 # Observability 配置
 [observability]
