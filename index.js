@@ -1964,8 +1964,6 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
   const totalCount = backends.length;
   const status = availableBackend ? '🟢 正常运行' : totalCount > 0 ? '🔴 服务异常' : '⚪ 未配置';
   
-  // === 修复时间转换：使用正确的时区处理 ===
-  
   // 获取当前时间的北京时间（使用正确的时区转换）
   const now = new Date();
   const beijingNowStr = getBeijingTimeString(now);
@@ -2001,7 +1999,7 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>订阅转换服务状态</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2010,123 +2008,174 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
-            padding: 20px;
+            padding: 15px;
         }
         .status-container {
             background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 20px 15px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
             width: 100%;
             max-width: 1000px;
+            margin: 0 auto;
         }
         h1 {
             color: #333;
-            margin-bottom: 1.5rem;
+            margin-bottom: 20px;
             text-align: center;
-            font-weight: 300;
+            font-weight: 500;
+            font-size: 22px;
         }
         .status-header {
             text-align: center;
-            margin-bottom: 2rem;
+            margin-bottom: 20px;
         }
         .status-badge {
             display: inline-block;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-weight: 500;
-            font-size: 14px;
-            margin-bottom: 10px;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-weight: 600;
+            font-size: 16px;
+            margin-bottom: 15px;
         }
         .status-healthy { background: #d4edda; color: #155724; }
         .status-unhealthy { background: #f8d7da; color: #721c24; }
         .status-unconfigured { background: #e2e3e5; color: #383d41; }
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 15px;
-            margin-bottom: 2rem;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        @media (min-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
         }
         .stat-card {
             background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
+            padding: 15px 10px;
+            border-radius: 10px;
             text-align: center;
+            min-height: 85px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
         .stat-value {
-            font-size: 24px;
+            font-size: 22px;
             font-weight: bold;
             color: #2c3e50;
             margin-bottom: 5px;
+            line-height: 1.2;
         }
         .stat-label {
-            font-size: 12px;
+            font-size: 11px;
             color: #6c757d;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 0.5px;
         }
         .current-backend {
             background: #e7f5ff;
             border: 1px solid #bbdefb;
             padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 2rem;
+            border-radius: 10px;
+            margin-bottom: 20px;
         }
         .current-backend h3 {
             color: #1971c2;
             margin-bottom: 10px;
+            font-size: 16px;
+            font-weight: 600;
         }
         .backend-url {
-            font-family: monospace;
-            font-size: 14px;
+            font-family: 'SF Mono', 'Roboto Mono', monospace;
+            font-size: 13px;
             color: #495057;
             word-break: break-all;
+            line-height: 1.4;
+            margin-bottom: 10px;
         }
         .backends-list {
-            margin-bottom: 2rem;
+            margin-bottom: 25px;
+        }
+        .backends-list h3 {
+            margin-bottom: 15px;
+            color: #495057;
+            font-weight: 500;
+            font-size: 16px;
         }
         .backend-item {
             display: flex;
-            align-items: center;
-            padding: 12px;
+            align-items: flex-start;
+            padding: 15px;
             border: 1px solid #e9ecef;
-            border-radius: 6px;
-            margin-bottom: 8px;
+            border-radius: 10px;
+            margin-bottom: 12px;
             background: #fff;
+            flex-direction: column;
+        }
+        @media (min-width: 768px) {
+            .backend-item {
+                flex-direction: row;
+                align-items: center;
+            }
+        }
+        .backend-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            width: 100%;
         }
         .health-indicator {
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
-            margin-right: 12px;
+            margin-right: 10px;
+            flex-shrink: 0;
+            margin-top: 5px;
         }
         .health-up { background: #28a745; }
         .health-down { background: #dc3545; }
         .health-unknown { background: #ffc107; }
         .backend-info {
             flex: 1;
+            width: 100%;
+        }
+        .backend-name {
+            font-family: 'SF Mono', 'Roboto Mono', monospace;
+            font-size: 13px;
+            color: #495057;
+            font-weight: 500;
+            margin-bottom: 5px;
+            word-break: break-all;
         }
         .backend-meta {
             font-size: 12px;
             color: #6c757d;
-            margin-top: 2px;
             display: flex;
             flex-wrap: wrap;
-            gap: 10px;
+            gap: 8px;
+            margin-top: 10px;
         }
         .meta-item {
             display: flex;
             align-items: center;
-            gap: 4px;
+            padding: 4px 8px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            white-space: nowrap;
         }
         .weight-badge {
             display: inline-block;
-            padding: 2px 6px;
-            border-radius: 4px;
+            padding: 3px 8px;
+            border-radius: 12px;
             font-size: 11px;
             font-weight: bold;
+            margin-left: 10px;
         }
         .weight-high { background: #d4edda; color: #155724; }
         .weight-medium { background: #fff3cd; color: #856404; }
@@ -2134,16 +2183,17 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         .footer {
             text-align: center;
             color: #6c757d;
-            font-size: 12px;
-            margin-top: 2rem;
+            font-size: 11px;
+            margin-top: 20px;
+            line-height: 1.5;
         }
         .request-id {
-            font-family: monospace;
-            font-size: 11px;
+            font-family: 'SF Mono', 'Roboto Mono', monospace;
+            font-size: 10px;
             color: #adb5bd;
         }
         .time-info {
-            margin-bottom: 10px;
+            margin-bottom: 15px;
             text-align: center;
             color: #495057;
             font-size: 14px;
@@ -2152,52 +2202,58 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             background: #f8f9fa;
             border: 1px solid #e9ecef;
             padding: 15px;
-            border-radius: 8px;
+            border-radius: 10px;
             margin-top: 20px;
         }
         .info-section h3 {
             color: #495057;
             margin-bottom: 10px;
-            font-weight: 400;
+            font-weight: 500;
+            font-size: 15px;
         }
         .info-section ul {
             margin-left: 20px;
             color: #6c757d;
-            font-size: 14px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .info-section li {
+            margin-bottom: 6px;
         }
         .info-section code {
             background: #e9ecef;
             padding: 2px 6px;
             border-radius: 4px;
-            font-family: monospace;
+            font-family: 'SF Mono', 'Roboto Mono', monospace;
+            font-size: 12px;
         }
         .api-links {
             display: flex;
             flex-wrap: wrap;
-            gap: 10px;
+            gap: 8px;
             margin-top: 20px;
+            justify-content: center;
         }
         .api-link {
             background: #007bff;
             color: white;
-            padding: 8px 16px;
-            border-radius: 4px;
+            padding: 8px 14px;
+            border-radius: 6px;
             text-decoration: none;
-            font-size: 14px;
+            font-size: 13px;
             transition: background 0.3s;
+            text-align: center;
+            flex: 1;
+            min-width: calc(50% - 8px);
+        }
+        @media (min-width: 480px) {
+            .api-link {
+                min-width: auto;
+                flex: none;
+            }
         }
         .api-link:hover {
             background: #0056b3;
-        }
-        .backend-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 5px;
-        }
-        .backend-name {
-            font-weight: 500;
-            color: #495057;
         }
         .performance-stats {
             display: grid;
@@ -2208,27 +2264,107 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         .perf-stat {
             background: #e9ecef;
             padding: 10px;
-            border-radius: 6px;
+            border-radius: 8px;
             text-align: center;
         }
         .perf-label {
-            font-size: 11px;
+            font-size: 10px;
             color: #6c757d;
             text-transform: uppercase;
+            margin-top: 3px;
         }
         .perf-value {
-            font-size: 18px;
+            font-size: 16px;
             font-weight: bold;
             color: #495057;
+            line-height: 1.2;
+        }
+        .backend-meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            width: 100%;
+        }
+        @media (min-width: 480px) {
+            .backend-meta-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+        @media (min-width: 768px) {
+            .backend-meta-grid {
+                grid-template-columns: repeat(6, 1fr);
+                gap: 6px;
+            }
+        }
+        .meta-grid-item {
+            background: #f8f9fa;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            min-height: 45px;
+            justify-content: center;
+        }
+        .meta-label {
+            color: #6c757d;
+            font-size: 10px;
+            margin-bottom: 2px;
+            white-space: nowrap;
+        }
+        .meta-value {
+            color: #495057;
+            font-weight: 500;
+            font-size: 12px;
+            word-break: break-all;
+        }
+        .backend-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            margin-bottom: 12px;
+        }
+        .backend-title {
+            font-family: 'SF Mono', 'Roboto Mono', monospace;
+            font-size: 13px;
+            color: #495057;
+            font-weight: 500;
+            flex: 1;
+            word-break: break-all;
+            margin-right: 10px;
+        }
+        .meta-error {
+            color: #dc3545;
+            background: #f8d7da;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-top: 8px;
+            width: 100%;
+            text-align: center;
+        }
+        .meta-version {
+            color: #6c757d;
+            background: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-top: 8px;
+            width: 100%;
+            text-align: center;
+            font-family: 'SF Mono', 'Roboto Mono', monospace;
         }
     </style>
 </head>
 <body>
     <div class="status-container">
-        <h1>🚀 订阅转换后端状态 (优化版)</h1>
+        <h1>🚀 订阅转换后端状态</h1>
         
         <div class="time-info">
-            页面生成时间 (北京时间): ${beijingNowStr}
+            页面生成时间: ${beijingNowStr}
         </div>
         
         <div class="status-header">
@@ -2240,34 +2376,34 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         <div class="performance-stats">
             <div class="perf-stat">
                 <div class="perf-value">${cache.performanceStats.totalRequests}</div>
-                <div class="perf-label">总请求数</div>
+                <div class="perf-label">总请求</div>
             </div>
             <div class="perf-stat">
                 <div class="perf-value">${cache.performanceStats.successfulRequests}</div>
-                <div class="perf-label">成功请求</div>
+                <div class="perf-label">成功</div>
             </div>
             <div class="perf-stat">
                 <div class="perf-value">${Math.round(cache.performanceStats.avgResponseTime)}ms</div>
-                <div class="perf-label">平均响应</div>
+                <div class="perf-label">均时</div>
             </div>
         </div>
         
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-value">${totalCount}</div>
-                <div class="stat-label">总后端数</div>
+                <div class="stat-label">总后端</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">${healthyCount}</div>
-                <div class="stat-label">健康后端</div>
+                <div class="stat-label">健康</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">${cache.lastKVWriteTimes.size}</div>
-                <div class="stat-label">KV写入节省</div>
+                <div class="stat-label">KV节省</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">${cache.errorLogs.length}</div>
-                <div class="stat-label">错误日志</div>
+                <div class="stat-label">错误</div>
             </div>
         </div>
         
@@ -2278,27 +2414,27 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             ${health[availableBackend]?.version && health[availableBackend].version !== '未知版本' ? `
             <div class="backend-meta">
                 <span class="meta-item">版本: ${health[availableBackend].version}</span>
-                ${health[availableBackend]?.responseTime ? `<span class="meta-item">响应时间: ${health[availableBackend].responseTime}ms</span>` : ''}
+                ${health[availableBackend]?.responseTime ? `<span class="meta-item">响应: ${health[availableBackend].responseTime}ms</span>` : ''}
                 <span class="meta-item">权重: <span class="weight-badge ${getWeightClass(cache.backendWeights.get(availableBackend) || MAX_WEIGHT)}">${cache.backendWeights.get(availableBackend) || MAX_WEIGHT}</span></span>
-                <span class="meta-item">请求数: ${cache.requestCounts.get(availableBackend) || 0}</span>
+                <span class="meta-item">请求: ${cache.requestCounts.get(availableBackend) || 0}</span>
             </div>
             ` : ''}
         </div>
         ` : totalCount > 0 ? `
         <div class="current-backend" style="background: #f8d7da; border-color: #f5c6cb;">
             <h3 style="color: #721c24;">⚠️ 服务异常</h3>
-            <div>所有后端服务器均不可用，服务已中断</div>
+            <div style="color: #721c24; font-size: 14px;">所有后端服务器均不可用，服务已中断</div>
         </div>
         ` : `
         <div class="current-backend" style="background: #e2e3e5; border-color: #d6d8db;">
             <h3 style="color: #383d41;">⚪ 未配置</h3>
-            <div>尚未配置后端服务器，请在Cloudflare Dashboard中配置BACKEND_URLS</div>
+            <div style="color: #383d41; font-size: 14px;">尚未配置后端服务器</div>
         </div>
         `}
         
         ${totalCount > 0 ? `
         <div class="backends-list">
-            <h3 style="margin-bottom: 10px; color: #495057; font-weight: 400;">后端状态详情</h3>
+            <h3>后端状态详情</h3>
             ${backends.map(url => {
               const status = health[url] || { healthy: null };
               const weight = cache.backendWeights.get(url) || MAX_WEIGHT;
@@ -2317,23 +2453,53 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
               
               return `
               <div class="backend-item">
-                  <div class="health-indicator ${statusClass}"></div>
-                  <div class="backend-info">
-                      <div class="backend-header">
-                          <div class="backend-name">${url}</div>
-                          <span class="weight-badge ${getWeightClass(weight)}">权重: ${weight}</span>
+                  <div class="backend-title-row">
+                      <div class="health-indicator ${statusClass}"></div>
+                      <div class="backend-title">${url}</div>
+                      <span class="weight-badge ${getWeightClass(weight)}">${weight}</span>
+                  </div>
+                  
+                  <div class="backend-meta-grid">
+                      <div class="meta-grid-item">
+                          <div class="meta-label">状态</div>
+                          <div class="meta-value">${statusText}</div>
                       </div>
-                      <div class="backend-meta">
-                          <span class="meta-item">状态: ${statusText}</span>
-                          <span class="meta-item">最后检查: ${timestamp}</span>
-                          ${status.responseTime ? `<span class="meta-item">响应: ${status.responseTime}ms</span>` : ''}
-                          <span class="meta-item">失败: ${failureCount}</span>
-                          <span class="meta-item">请求: ${requestCount}</span>
-                          <span class="meta-item">最后成功: ${lastSuccessTime}秒前</span>
-                          ${status.version && status.version !== '未知版本' ? `<span class="meta-item">版本: ${status.version.substring(0, 30)}</span>` : ''}
-                          ${status.error ? `<span class="meta-item" style="color: #dc3545;">错误: ${status.error}</span>` : ''}
+                      <div class="meta-grid-item">
+                          <div class="meta-label">最后检查</div>
+                          <div class="meta-value">${timestamp}</div>
+                      </div>
+                      ${status.responseTime ? `
+                      <div class="meta-grid-item">
+                          <div class="meta-label">响应</div>
+                          <div class="meta-value">${status.responseTime}ms</div>
+                      </div>
+                      ` : `
+                      <div class="meta-grid-item">
+                          <div class="meta-label">响应</div>
+                          <div class="meta-value">-</div>
+                      </div>
+                      `}
+                      <div class="meta-grid-item">
+                          <div class="meta-label">失败</div>
+                          <div class="meta-value">${failureCount}</div>
+                      </div>
+                      <div class="meta-grid-item">
+                          <div class="meta-label">请求</div>
+                          <div class="meta-value">${requestCount}</div>
+                      </div>
+                      <div class="meta-grid-item">
+                          <div class="meta-label">最后成功</div>
+                          <div class="meta-value">${lastSuccessTime}${lastSuccessTime === '从未' ? '' : '秒前'}</div>
                       </div>
                   </div>
+                  
+                  ${status.version && status.version !== '未知版本' ? `
+                  <div class="meta-version">${status.version.substring(0, 40)}</div>
+                  ` : ''}
+                  
+                  ${status.error ? `
+                  <div class="meta-error">错误: ${status.error}</div>
+                  ` : ''}
               </div>`;
             }).join('')}
         </div>
@@ -2373,12 +2539,12 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         </div>
         
         <div class="api-links">
-            <a href="/api/health" class="api-link">健康状态API</a>
-            <a href="/api/config" class="api-link">配置信息</a>
+            <a href="/api/health" class="api-link">健康状态</a>
+            <a href="/api/config" class="api-link">配置</a>
             <a href="/api/kv-stats" class="api-link">KV统计</a>
             <a href="/api/benchmark" class="api-link">性能测试</a>
             <a href="/api/error-logs" class="api-link">错误日志</a>
-            <a href="/api/reset-weights?confirm=true" class="api-link" onclick="return confirm('确定要重置所有后端权重吗？')">重置权重</a>
+            <button class="api-link" onclick="resetWeights('${requestId}')" style="border: none; background: #007bff; color: white; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;">重置权重</button>
         </div>
         
         <div class="footer">
@@ -2396,10 +2562,41 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             return 'weight-low';
         }
         
-        // 自动刷新页面（每30秒）
+        // 重置权重函数
+        function resetWeights(requestId) {
+            if (confirm('确定要重置所有后端权重吗？这会将所有后端权重恢复到最大值，并清空失败计数。')) {
+                fetch('/api/reset-weights', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('HTTP错误! 状态码: ' + response.status);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success) {
+                        alert(data.message || '权重重置成功！页面将自动刷新。');
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 1000);
+                    } else {
+                        alert('权重重置失败：' + (data.error || '未知错误'));
+                    }
+                })
+                .catch(error => {
+                    alert('请求失败：' + error.message);
+                });
+            }
+        }
+        
+        // 自动刷新页面（每60秒）
         setTimeout(() => {
             window.location.reload();
-        }, 30000);
+        }, 60000);
     </script>
 </body>
 </html>`;
