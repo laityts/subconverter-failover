@@ -46,6 +46,14 @@ let cache = {
     failedRequests: 0,
     avgResponseTime: 0,
     lastResetTime: Date.now()
+  },
+  // 新增：KV写入统计（每日重置）
+  kvWriteStats: {
+    dailyCount: 0, // 今日KV写入次数
+    lastResetDate: null, // 上次重置日期（北京时间）
+    totalCount: 0, // 历史总写入次数
+    lastWriteTime: 0, // 最后写入时间
+    writeOperations: [] // 写入操作记录
   }
 };
 
@@ -155,43 +163,6 @@ function getBackendsFromEnv(env) {
   return DEFAULT_BACKENDS;
 }
 
-// KV写入节流检查
-function canWriteKV(key, cooldown, env) {
-  const now = Date.now();
-  const lastWriteTime = cache.lastKVWriteTimes.get(key) || 0;
-  
-  if (now - lastWriteTime < cooldown) {
-    return false;
-  }
-  
-  cache.lastKVWriteTimes.set(key, now);
-  return true;
-}
-
-// 检查是否需要发送IP通知
-function shouldSendIPNotification(clientIp, backendUrl) {
-  const lastBackend = cache.ipNotificationBackends.get(clientIp);
-  
-  // 如果从未发送过通知，或者后端发生变化，需要发送
-  return !lastBackend || lastBackend !== backendUrl;
-}
-
-// 更新IP通知记录
-function updateIPNotificationRecord(clientIp, backendUrl) {
-  const now = Date.now();
-  cache.ipNotificationTimestamps.set(clientIp, now);
-  cache.ipNotificationBackends.set(clientIp, backendUrl);
-  
-  // 定期清理过期的IP记录（24小时）
-  const maxAge = 24 * 60 * 60 * 1000; // 24小时
-  for (const [ip, timestamp] of cache.ipNotificationTimestamps.entries()) {
-    if (now - timestamp > maxAge) {
-      cache.ipNotificationTimestamps.delete(ip);
-      cache.ipNotificationBackends.delete(ip);
-    }
-  }
-}
-
 // 获取北京时间字符串（修复时间转换）
 function getBeijingTimeString(date = new Date()) {
   try {
@@ -224,6 +195,101 @@ function getBeijingTimeShort(date = new Date()) {
     });
   } catch (error) {
     return date.toISOString().substring(11, 19);
+  }
+}
+
+// 获取北京日期字符串（YYYY-MM-DD格式）
+function getBeijingDateString(date = new Date()) {
+  try {
+    const beijingDate = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+    const year = beijingDate.getUTCFullYear();
+    const month = String(beijingDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(beijingDate.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch (error) {
+    // 如果转换失败，返回ISO日期
+    return date.toISOString().substring(0, 10);
+  }
+}
+
+// KV写入统计管理
+function updateKvWriteStats(key, requestId) {
+  try {
+    const now = Date.now();
+    const todayBeijing = getBeijingDateString(new Date());
+    
+    // 检查是否需要重置每日计数（北京时间0点）
+    if (cache.kvWriteStats.lastResetDate !== todayBeijing) {
+      console.log(`[${requestId}] 重置KV写入统计，新日期: ${todayBeijing}，旧日期: ${cache.kvWriteStats.lastResetDate}`);
+      cache.kvWriteStats.dailyCount = 0;
+      cache.kvWriteStats.lastResetDate = todayBeijing;
+      cache.kvWriteStats.writeOperations = []; // 清空操作记录
+    }
+    
+    // 更新统计
+    cache.kvWriteStats.dailyCount++;
+    cache.kvWriteStats.totalCount++;
+    cache.kvWriteStats.lastWriteTime = now;
+    
+    // 记录操作（最多保留100条）
+    cache.kvWriteStats.writeOperations.push({
+      key,
+      timestamp: now,
+      beijingTime: getBeijingTimeString(new Date(now)),
+      requestId: requestId
+    });
+    
+    if (cache.kvWriteStats.writeOperations.length > 100) {
+      cache.kvWriteStats.writeOperations = cache.kvWriteStats.writeOperations.slice(-100);
+    }
+    
+    console.log(`[${requestId}] KV写入统计更新: key=${key}, 今日写入次数=${cache.kvWriteStats.dailyCount}, 总写入次数=${cache.kvWriteStats.totalCount}`);
+    
+    return cache.kvWriteStats.dailyCount;
+  } catch (error) {
+    console.error(`[${requestId}] 更新KV写入统计失败:`, error);
+    return 0;
+  }
+}
+
+// KV写入节流检查（更新：添加KV写入统计）
+function canWriteKV(key, cooldown, env, requestId) {
+  const now = Date.now();
+  const lastWriteTime = cache.lastKVWriteTimes.get(key) || 0;
+  
+  if (now - lastWriteTime < cooldown) {
+    return false;
+  }
+  
+  cache.lastKVWriteTimes.set(key, now);
+  
+  // 更新KV写入统计
+  updateKvWriteStats(key, requestId);
+  
+  return true;
+}
+
+// 检查是否需要发送IP通知
+function shouldSendIPNotification(clientIp, backendUrl) {
+  const lastBackend = cache.ipNotificationBackends.get(clientIp);
+  
+  // 如果从未发送过通知，或者后端发生变化，需要发送
+  return !lastBackend || lastBackend !== backendUrl;
+}
+
+// 更新IP通知记录
+function updateIPNotificationRecord(clientIp, backendUrl) {
+  const now = Date.now();
+  cache.ipNotificationTimestamps.set(clientIp, now);
+  cache.ipNotificationBackends.set(clientIp, backendUrl);
+  
+  // 定期清理过期的IP记录（24小时）
+  const maxAge = 24 * 60 * 60 * 1000; // 24小时
+  for (const [ip, timestamp] of cache.ipNotificationTimestamps.entries()) {
+    if (now - timestamp > maxAge) {
+      cache.ipNotificationTimestamps.delete(ip);
+      cache.ipNotificationBackends.delete(ip);
+    }
   }
 }
 
@@ -439,12 +505,22 @@ function cleanupExpiredCache(env) {
       cache.ipNotificationBackends.delete(ip);
     }
   }
+  
+  // 检查并重置KV写入统计（每日北京时间0点）
+  const todayBeijing = getBeijingDateString(new Date());
+  if (cache.kvWriteStats.lastResetDate !== todayBeijing) {
+    console.log(`检测到日期变化，重置KV写入统计: ${cache.kvWriteStats.lastResetDate} -> ${todayBeijing}`);
+    cache.kvWriteStats.dailyCount = 0;
+    cache.kvWriteStats.lastResetDate = todayBeijing;
+    cache.kvWriteStats.writeOperations = [];
+  }
 }
 
 // 错误日志记录
 function logError(message, error, requestId) {
   const errorEntry = {
     timestamp: new Date().toISOString(),
+    beijingTime: getBeijingTimeString(),
     requestId: requestId || 'unknown',
     message: message,
     error: error?.message || String(error),
@@ -864,7 +940,7 @@ async function saveHealthStatus(kv, newStatus, requestId, env) {
     const KV_WRITE_COOLDOWN = getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN);
     
     // 检查KV写入节流
-    if (!canWriteKV('health_status', KV_WRITE_COOLDOWN, env)) {
+    if (!canWriteKV('health_status', KV_WRITE_COOLDOWN, env, requestId)) {
       console.log(`[${requestId}] 健康状态写入被节流，仅更新内存缓存`);
       
       // 只更新内存缓存
@@ -946,7 +1022,7 @@ async function saveLastAvailableBackend(kv, backendUrl, requestId, env) {
     const KV_WRITE_COOLDOWN = getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN);
     
     // 检查KV写入节流
-    if (!canWriteKV('last_available_backend', KV_WRITE_COOLDOWN, env)) {
+    if (!canWriteKV('last_available_backend', KV_WRITE_COOLDOWN, env, requestId)) {
       console.log(`[${requestId}] 上次可用后端写入被节流，仅更新内存缓存`);
       cache.lastAvailableBackend = backendUrl;
       return true;
@@ -1580,7 +1656,13 @@ async function handleApiRequest(request, env, requestId) {
           request_count: cache.requestCounts.get(url) || 0,
           last_success: cache.lastSuccessfulRequests.get(url) || null
         })),
-        kv_writes_saved: cache.lastKVWriteTimes.size,
+        kv_write_stats: {
+          daily_count: cache.kvWriteStats.dailyCount,
+          total_count: cache.kvWriteStats.totalCount,
+          last_reset_date: cache.kvWriteStats.lastResetDate,
+          last_write_time: cache.kvWriteStats.lastWriteTime,
+          last_write_beijing_time: cache.kvWriteStats.lastWriteTime > 0 ? getBeijingTimeString(new Date(cache.kvWriteStats.lastWriteTime)) : null
+        },
         performance_stats: cache.performanceStats
       }), {
         headers: { 
@@ -1706,6 +1788,14 @@ async function handleApiRequest(request, env, requestId) {
           failedRequests: 0,
           avgResponseTime: 0,
           lastResetTime: Date.now()
+        },
+        // 重置KV写入统计
+        kvWriteStats: {
+          dailyCount: 0,
+          lastResetDate: getBeijingDateString(new Date()),
+          totalCount: 0,
+          lastWriteTime: 0,
+          writeOperations: []
         }
       };
       
@@ -1811,7 +1901,15 @@ async function handleApiRequest(request, env, requestId) {
           beijing_time: getBeijingTimeString(new Date(time)),
           ago: Date.now() - time
         })),
-        total_writes_saved: cache.lastKVWriteTimes.size,
+        kv_write_stats: {
+          daily_count: cache.kvWriteStats.dailyCount,
+          total_count: cache.kvWriteStats.totalCount,
+          last_reset_date: cache.kvWriteStats.lastResetDate,
+          last_write_time: cache.kvWriteStats.lastWriteTime,
+          last_write_beijing_time: cache.kvWriteStats.lastWriteTime > 0 ? getBeijingTimeString(new Date(cache.kvWriteStats.lastWriteTime)) : null,
+          today_beijing_date: getBeijingDateString(new Date()),
+          write_operations: cache.kvWriteStats.writeOperations.slice(-20) // 最近20条写入操作
+        },
         optimization_enabled: true,
         kv_write_cooldown: getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN),
         current_service_status: cache.lastServiceStatus,
@@ -1964,6 +2062,8 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
   const totalCount = backends.length;
   const status = availableBackend ? '🟢 正常运行' : totalCount > 0 ? '🔴 服务异常' : '⚪ 未配置';
   
+  // === 修复时间转换：使用正确的时区处理 ===
+  
   // 获取当前时间的北京时间（使用正确的时区转换）
   const now = new Date();
   const beijingNowStr = getBeijingTimeString(now);
@@ -1993,6 +2093,12 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
   const MAX_WEIGHT = getConfig(env, 'MAX_WEIGHT', DEFAULT_MAX_WEIGHT);
   const MIN_WEIGHT = getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT);
   const KV_WRITE_COOLDOWN = getConfig(env, 'KV_WRITE_COOLDOWN', DEFAULT_KV_WRITE_COOLDOWN);
+  
+  // 获取KV写入统计信息
+  const kvDailyWrites = cache.kvWriteStats.dailyCount || 0;
+  const kvTotalWrites = cache.kvWriteStats.totalCount || 0;
+  const kvLastResetDate = cache.kvWriteStats.lastResetDate || getBeijingDateString(new Date());
+  const todayBeijingDate = getBeijingDateString(new Date());
   
   const html = `
 <!DOCTYPE html>
@@ -2357,6 +2463,19 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             text-align: center;
             font-family: 'SF Mono', 'Roboto Mono', monospace;
         }
+        .kv-stats-info {
+            font-size: 11px;
+            color: #6c757d;
+            text-align: center;
+            margin-top: 5px;
+            line-height: 1.4;
+        }
+        .kv-reset-info {
+            font-size: 10px;
+            color: #adb5bd;
+            text-align: center;
+            margin-top: 3px;
+        }
     </style>
 </head>
 <body>
@@ -2398,8 +2517,10 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
                 <div class="stat-label">健康</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">${cache.lastKVWriteTimes.size}</div>
-                <div class="stat-label">KV节省</div>
+                <div class="stat-value">${kvDailyWrites}</div>
+                <div class="stat-label">KV写入</div>
+                <div class="kv-stats-info">今日: ${kvDailyWrites}<br>总计: ${kvTotalWrites}</div>
+                <div class="kv-reset-info">每日0点(北京时间)重置</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">${cache.errorLogs.length}</div>
@@ -2506,13 +2627,15 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
         ` : ''}
         
         <div class="info-section" style="background: #d4edda; border-color: #c3e6cb;">
-            <h3 style="color: #155724;">💾 KV写入优化</h3>
+            <h3 style="color: #155724;">💾 KV写入统计</h3>
             <ul>
+                <li>今日KV写入次数: <strong>${kvDailyWrites}</strong> (北京时间 ${todayBeijingDate})</li>
+                <li>历史总KV写入次数: <strong>${kvTotalWrites}</strong></li>
+                <li>最后重置日期: ${kvLastResetDate}</li>
                 <li>写入节流: ${KV_WRITE_COOLDOWN/1000}秒内不重复写入相同数据</li>
                 <li>状态变化检测: 仅当健康状态真正变化时才写入KV</li>
                 <li>内存缓存优先: 使用内存缓存减少KV读取次数</li>
                 <li>预估减少: KV写入次数减少90%以上</li>
-                <li>已节省写入: ${cache.lastKVWriteTimes.size}次</li>
             </ul>
         </div>
         
@@ -2552,6 +2675,7 @@ function createStatusPage(requestId, backends, health, availableBackend, env) {
             <div>最后更新: ${beijingNowStr}</div>
             <div>当前服务状态: ${availableBackend ? 'available' : 'unavailable'}</div>
             <div>性能统计重置时间: ${beijingResetTimeStr}</div>
+            <div>KV写入统计重置: 每日0点(北京时间)自动重置</div>
         </div>
     </div>
     
@@ -2627,7 +2751,7 @@ export default {
     // 验证配置
     validateConfig(env, requestId);
     
-    // 执行缓存清理
+    // 执行缓存清理（包括检查KV写入统计是否需要重置）
     cleanupExpiredCache(env);
     
     // 更新总请求数
@@ -2748,7 +2872,7 @@ export default {
       const kv = env.SUB_BACKENDS;
       const checkResults = await performFullHealthCheck(kv, requestId, env);
       
-      // 执行缓存清理
+      // 执行缓存清理（包括检查KV写入统计是否需要重置）
       cleanupExpiredCache(env);
       
       // 发送Telegram通知（只在状态变化时）
@@ -2766,7 +2890,7 @@ export default {
         console.log(`[${requestId}] Telegram通知未配置，跳过发送`);
       }
       
-      console.log(`[${requestId}] Cron健康检查完成，KV写入已优化`);
+      console.log(`[${requestId}] Cron健康检查完成，KV写入已优化，今日KV写入次数: ${cache.kvWriteStats.dailyCount}`);
     } catch (error) {
       logError('Cron健康检查失败', error, requestId);
     }
