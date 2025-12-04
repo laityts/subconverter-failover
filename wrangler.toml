@@ -31,8 +31,17 @@ FAST_CHECK_TIMEOUT = "800"
 # 快速检查缓存时间（毫秒，默认2秒）
 FAST_CHECK_CACHE_TTL = "2000"
 
-# KV写入冷却时间（毫秒，默认30秒）- 新增
+# KV写入冷却时间（毫秒，默认30秒）
 KV_WRITE_COOLDOWN = "30000"
+
+# 加权轮询配置
+MAX_WEIGHT = "100"
+MIN_WEIGHT = "10"
+WEIGHT_RECOVERY_RATE = "5"
+FAILURE_WEIGHT_DECREMENT = "20"
+
+# 后端信息过期阈值（毫秒，默认30秒）
+BACKEND_STALE_THRESHOLD = "30000"
 
 # 触发器配置
 [triggers]
