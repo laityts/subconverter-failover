@@ -2106,219 +2106,501 @@ async function createStatusPage(requestId, env) {
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>订阅转换服务状态 (D1数据库)</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+        
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            padding: 20px;
+            padding: 12px;
+            -webkit-text-size-adjust: 100%;
+            -webkit-font-smoothing: antialiased;
         }
+        
         .container {
             background: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 1200px;
+            padding: 16px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            max-width: 100%;
             margin: 0 auto;
+            overflow: hidden;
         }
+        
         h1 {
             color: #333;
-            margin-bottom: 20px;
+            margin-bottom: 16px;
             text-align: center;
+            font-size: 20px;
+            font-weight: 600;
+            line-height: 1.3;
         }
+        
         .status-header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
+        
         .status-badge {
             display: inline-block;
-            padding: 12px 24px;
-            border-radius: 25px;
+            padding: 10px 18px;
+            border-radius: 20px;
             font-weight: 600;
-            font-size: 18px;
-            margin-bottom: 15px;
+            font-size: 16px;
+            margin-bottom: 12px;
+            max-width: 90%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
-        .status-healthy { background: #d4edda; color: #155724; }
-        .status-unhealthy { background: #f8d7da; color: #721c24; }
+        
+        .status-healthy { 
+            background: #d4edda; 
+            color: #155724; 
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status-unhealthy { 
+            background: #f8d7da; 
+            color: #721c24; 
+            border: 1px solid #f5c6cb;
+        }
+        
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin-bottom: 30px;
+            gap: 10px;
+            margin-bottom: 20px;
         }
-        @media (min-width: 768px) {
+        
+        @media (min-width: 480px) {
             .stats-grid {
-                grid-template-columns: repeat(4, 1fr);
+                gap: 12px;
             }
         }
+        
         .stat-card {
             background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
+            padding: 14px 10px;
+            border-radius: 8px;
             text-align: center;
+            min-height: 70px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
+        
         .stat-value {
-            font-size: 28px;
-            font-weight: bold;
+            font-size: 22px;
+            font-weight: 700;
             color: #2c3e50;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
+            line-height: 1.2;
         }
+        
         .stat-label {
-            font-size: 14px;
+            font-size: 12px;
             color: #6c757d;
+            line-height: 1.3;
         }
+        
         .current-backend {
             background: #e7f5ff;
             border: 1px solid #bbdefb;
-            padding: 20px;
+            padding: 14px;
             border-radius: 10px;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
+        
         .current-backend h3 {
             color: #1971c2;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
+            font-size: 16px;
+            font-weight: 600;
         }
+        
         .backend-url {
-            font-family: monospace;
-            font-size: 14px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 12px;
             color: #495057;
             word-break: break-all;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
+            line-height: 1.4;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 6px;
+            border: 1px solid #dee2e6;
         }
+        
         .backends-list {
-            margin-bottom: 30px;
-        }
-        .backends-list h3 {
             margin-bottom: 20px;
+        }
+        
+        .backends-list h3 {
+            margin-bottom: 12px;
             color: #495057;
+            font-size: 16px;
+            font-weight: 600;
         }
+        
         .backend-item {
-            padding: 15px;
+            padding: 12px;
             border: 1px solid #e9ecef;
-            border-radius: 10px;
-            margin-bottom: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
             background: #fff;
+            font-size: 14px;
         }
+        
         .health-indicator {
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             display: inline-block;
-            margin-right: 10px;
+            margin-right: 8px;
+            flex-shrink: 0;
         }
+        
         .health-up { background: #28a745; }
         .health-down { background: #dc3545; }
+        
         .backend-info {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
+            align-items: flex-start;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+            gap: 6px;
         }
+        
         .backend-name {
-            font-family: monospace;
-            font-size: 14px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 13px;
             color: #495057;
             font-weight: 500;
+            word-break: break-all;
+            flex: 1;
+            min-width: 0;
         }
+        
         .backend-meta {
-            font-size: 12px;
+            font-size: 11px;
             color: #6c757d;
             display: flex;
             flex-wrap: wrap;
-            gap: 10px;
+            gap: 6px;
+            margin-top: 6px;
         }
+        
         .meta-item {
             background: #f8f9fa;
-            padding: 4px 8px;
+            padding: 3px 6px;
             border-radius: 4px;
+            white-space: nowrap;
         }
+        
         .info-section {
             background: #f8f9fa;
             border: 1px solid #e9ecef;
-            padding: 20px;
+            padding: 14px;
             border-radius: 10px;
-            margin-top: 20px;
+            margin-top: 16px;
+            font-size: 14px;
         }
+        
         .info-section h3 {
             color: #495057;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
+            font-size: 16px;
+            font-weight: 600;
         }
+        
         .info-section ul {
-            margin-left: 20px;
+            margin-left: 16px;
             color: #6c757d;
-            line-height: 1.6;
+            line-height: 1.5;
         }
+        
         .info-section li {
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
-        .api-links {
+        
+        .action-buttons {
             display: flex;
             flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 30px;
+            gap: 8px;
+            margin-top: 20px;
             justify-content: center;
         }
+        
         .action-btn {
             background: #007bff;
             color: white;
-            padding: 12px 20px;
-            border-radius: 8px;
+            padding: 10px 14px;
+            border-radius: 6px;
             text-decoration: none;
-            transition: background 0.3s;
+            transition: all 0.2s ease;
             border: none;
             cursor: pointer;
-            font-size: 14px;
-            min-width: 140px;
+            font-size: 13px;
+            min-width: 0;
+            flex: 1;
+            min-width: 120px;
+            max-width: calc(50% - 4px);
             text-align: center;
-            display: inline-block;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 40px;
         }
-        .action-btn:hover {
+        
+        .action-btn:hover, .action-btn:active {
             background: #0056b3;
+            transform: translateY(-1px);
         }
+        
         .action-btn-secondary {
             background: #28a745;
         }
-        .action-btn-secondary:hover {
+        
+        .action-btn-secondary:hover, .action-btn-secondary:active {
             background: #1e7e34;
         }
+        
         .action-btn-danger {
             background: #dc3545;
         }
-        .action-btn-danger:hover {
+        
+        .action-btn-danger:hover, .action-btn-danger:active {
             background: #c82333;
         }
+        
         .footer {
             text-align: center;
             color: #6c757d;
-            font-size: 12px;
-            margin-top: 30px;
+            font-size: 11px;
+            margin-top: 20px;
             line-height: 1.5;
+            padding: 12px 0 0 0;
+            border-top: 1px solid #e9ecef;
         }
+        
         .time-info {
             text-align: center;
             color: #495057;
-            margin-bottom: 20px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            line-height: 1.4;
         }
+        
         .d1-stats {
             background: #d4edda;
             border: 1px solid #c3e6cb;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 20px;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 16px;
         }
+        
         .d1-stats h3 {
             color: #155724;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
+            font-size: 16px;
+            font-weight: 600;
         }
-        .btn-group {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-            justify-content: center;
-            flex-wrap: wrap;
+        
+        /* 响应式调整 */
+        @media (max-width: 360px) {
+            .container {
+                padding: 12px;
+            }
+            
+            h1 {
+                font-size: 18px;
+            }
+            
+            .stat-card {
+                padding: 10px 8px;
+                min-height: 60px;
+            }
+            
+            .stat-value {
+                font-size: 20px;
+            }
+            
+            .stat-label {
+                font-size: 11px;
+            }
+            
+            .action-btn {
+                min-width: 110px;
+                padding: 9px 12px;
+                font-size: 12px;
+            }
+        }
+        
+        @media (min-width: 640px) {
+            .container {
+                padding: 24px;
+                max-width: 640px;
+            }
+            
+            h1 {
+                font-size: 24px;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(4, 1fr);
+                gap: 15px;
+            }
+            
+            .stat-card {
+                padding: 18px 12px;
+            }
+            
+            .stat-value {
+                font-size: 24px;
+            }
+            
+            .stat-label {
+                font-size: 13px;
+            }
+            
+            .backend-item {
+                padding: 14px;
+            }
+            
+            .action-buttons {
+                gap: 10px;
+            }
+            
+            .action-btn {
+                flex: 0 1 auto;
+                max-width: none;
+                min-width: 140px;
+            }
+        }
+        
+        /* 按钮状态 */
+        .action-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        /* 触摸设备优化 */
+        @media (hover: none) {
+            .action-btn:hover {
+                transform: none;
+            }
+            
+            .action-btn:active {
+                transform: scale(0.98);
+            }
+        }
+        
+        /* 深色模式支持 */
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: linear-gradient(135deg, #4c51bf 0%, #6b21a8 100%);
+            }
+            
+            .container {
+                background: #1a1a1a;
+                color: #e0e0e0;
+            }
+            
+            h1 {
+                color: #e0e0e0;
+            }
+            
+            .stat-card {
+                background: #2d2d2d;
+            }
+            
+            .stat-value {
+                color: #ffffff;
+            }
+            
+            .stat-label {
+                color: #a0a0a0;
+            }
+            
+            .current-backend {
+                background: #1e3a5f;
+                border-color: #3b82f6;
+            }
+            
+            .current-backend h3 {
+                color: #93c5fd;
+            }
+            
+            .backend-url {
+                background: #2d2d2d;
+                border-color: #404040;
+                color: #d1d5db;
+            }
+            
+            .backend-item {
+                background: #2d2d2d;
+                border-color: #404040;
+            }
+            
+            .backend-name {
+                color: #d1d5db;
+            }
+            
+            .meta-item {
+                background: #3d3d3d;
+                color: #b0b0b0;
+            }
+            
+            .info-section {
+                background: #2d2d2d;
+                border-color: #404040;
+            }
+            
+            .info-section h3 {
+                color: #d1d5db;
+            }
+            
+            .info-section ul {
+                color: #a0a0a0;
+            }
+            
+            .d1-stats {
+                background: #1e453e;
+                border-color: #059669;
+            }
+            
+            .d1-stats h3 {
+                color: #34d399;
+            }
+        }
+        
+        /* 高对比度模式 */
+        @media (prefers-contrast: high) {
+            .status-healthy {
+                border: 2px solid #155724;
+            }
+            
+            .status-unhealthy {
+                border: 2px solid #721c24;
+            }
+            
+            .backend-item {
+                border: 1px solid #000;
+            }
+            
+            .action-btn {
+                border: 1px solid #000;
+            }
         }
     </style>
 </head>
@@ -2433,8 +2715,8 @@ async function createStatusPage(requestId, env) {
             </ul>
         </div>
         
-        <div class="btn-group">
-            <button class="action-btn" onclick="performHealthCheck()">🚀 手动健康检查</button>
+        <div class="action-buttons">
+            <button class="action-btn" onclick="performHealthCheck()" id="healthCheckBtn">🚀 手动健康检查</button>
             <a href="/api/health" class="action-btn">📊 健康状态API</a>
             <a href="/api/config" class="action-btn">⚙️ 配置信息</a>
             <a href="/api/d1-stats" class="action-btn">💾 D1统计</a>
@@ -2450,11 +2732,37 @@ async function createStatusPage(requestId, env) {
     </div>
     
     <script>
-        function performHealthCheck() {
-            const btn = document.querySelector('.action-btn');
-            const originalText = btn.textContent;
+        // 确保脚本在DOM加载后执行
+        document.addEventListener('DOMContentLoaded', function() {
+            // 移动端触摸优化
+            const buttons = document.querySelectorAll('.action-btn');
+            buttons.forEach(btn => {
+                btn.addEventListener('touchstart', function() {
+                    this.style.opacity = '0.8';
+                });
+                
+                btn.addEventListener('touchend', function() {
+                    this.style.opacity = '1';
+                });
+            });
             
-            btn.textContent = '检查中...';
+            // 防止双击缩放
+            let lastTouchEnd = 0;
+            document.addEventListener('touchend', function(event) {
+                const now = Date.now();
+                if (now - lastTouchEnd <= 300) {
+                    event.preventDefault();
+                }
+                lastTouchEnd = now;
+            }, false);
+        });
+        
+        function performHealthCheck() {
+            const btn = document.getElementById('healthCheckBtn');
+            const originalText = btn.textContent;
+            const originalHTML = btn.innerHTML;
+            
+            btn.innerHTML = '🔄 检查中...';
             btn.disabled = true;
             
             fetch('/api/health-check', {
@@ -2466,25 +2774,28 @@ async function createStatusPage(requestId, env) {
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    alert('健康检查完成！页面将自动刷新显示最新状态。');
+                    // 显示成功消息
+                    showToast('健康检查完成！页面即将刷新...', 'success');
                     setTimeout(() => {
                         window.location.reload();
                     }, 1500);
                 } else {
-                    alert('健康检查失败：' + (data.error || '未知错误'));
-                    btn.textContent = originalText;
+                    showToast('健康检查失败：' + (data.error || '未知错误'), 'error');
+                    btn.innerHTML = originalHTML;
                     btn.disabled = false;
                 }
             })
             .catch(error => {
-                alert('请求失败：' + error.message);
-                btn.textContent = originalText;
+                showToast('请求失败：' + error.message, 'error');
+                btn.innerHTML = originalHTML;
                 btn.disabled = false;
             });
         }
         
         function cleanupD1Data() {
             if (confirm('确定要清理7天前的旧数据吗？此操作不可撤销。')) {
+                showToast('正在清理数据...', 'info');
+                
                 fetch('/api/cleanup-d1?days=7', {
                     method: 'POST',
                     headers: {
@@ -2494,22 +2805,24 @@ async function createStatusPage(requestId, env) {
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        alert(data.message + ' 页面将自动刷新。');
+                        showToast(data.message + ' 页面即将刷新。', 'success');
                         setTimeout(() => {
                             window.location.reload();
                         }, 1000);
                     } else {
-                        alert('数据清理失败：' + (data.error || '未知错误'));
+                        showToast('数据清理失败：' + (data.error || '未知错误'), 'error');
                     }
                 })
                 .catch(error => {
-                    alert('请求失败：' + error.message);
+                    showToast('请求失败：' + error.message, 'error');
                 });
             }
         }
         
         function resetWeights() {
             if (confirm('确定要重置所有后端权重吗？这会将所有后端权重恢复到最大值，并清空失败计数。')) {
+                showToast('正在重置权重...', 'info');
+                
                 fetch('/api/reset-weights', {
                     method: 'POST',
                     headers: {
@@ -2519,26 +2832,100 @@ async function createStatusPage(requestId, env) {
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        alert(data.message || '权重重置成功！页面将自动刷新。');
+                        showToast(data.message || '权重重置成功！页面即将刷新。', 'success');
                         setTimeout(() => {
                             window.location.reload();
                         }, 1000);
                     } else {
-                        alert('权重重置失败：' + (data.error || '未知错误'));
+                        showToast('权重重置失败：' + (data.error || '未知错误'), 'error');
                     }
                 })
                 .catch(error => {
-                    alert('请求失败：' + error.message);
+                    showToast('请求失败：' + error.message, 'error');
                 });
             }
         }
         
-        // 每60秒自动刷新页面
-        setTimeout(() => {
-            if (confirm('页面已加载60秒，是否刷新以获取最新数据？')) {
-                window.location.reload();
+        // 简单的Toast通知函数
+        function showToast(message, type = 'info') {
+            // 移除已有的toast
+            const existingToast = document.querySelector('.toast-notification');
+            if (existingToast) {
+                existingToast.remove();
             }
-        }, 60000);
+            
+            const toast = document.createElement('div');
+            toast.className = 'toast-notification';
+            toast.innerHTML = message;
+            
+            // 样式
+            toast.style.position = 'fixed';
+            toast.style.bottom = '20px';
+            toast.style.left = '50%';
+            toast.style.transform = 'translateX(-50%)';
+            toast.style.backgroundColor = type === 'success' ? '#28a745' : 
+                                         type === 'error' ? '#dc3545' : '#007bff';
+            toast.style.color = 'white';
+            toast.style.padding = '12px 20px';
+            toast.style.borderRadius = '8px';
+            toast.style.zIndex = '1000';
+            toast.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+            toast.style.fontSize = '14px';
+            toast.style.maxWidth = '90%';
+            toast.style.textAlign = 'center';
+            toast.style.animation = 'fadeIn 0.3s ease';
+            
+            document.body.appendChild(toast);
+            
+            // 3秒后自动移除
+            setTimeout(() => {
+                toast.style.animation = 'fadeOut 0.3s ease';
+                setTimeout(() => {
+                    if (toast.parentNode) {
+                        toast.remove();
+                    }
+                }, 300);
+            }, 3000);
+        }
+        
+        // 添加CSS动画
+        const style = document.createElement('style');
+        style.textContent = \`
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+                to { opacity: 1; transform: translateX(-50%) translateY(0); }
+            }
+            @keyframes fadeOut {
+                from { opacity: 1; transform: translateX(-50%) translateY(0); }
+                to { opacity: 0; transform: translateX(-50%) translateY(20px); }
+            }
+        \`;
+        document.head.appendChild(style);
+        
+        // 每60秒自动刷新页面（仅在用户不操作时）
+        let lastActivity = Date.now();
+        const refreshInterval = 60000; // 60秒
+        
+        // 监听用户活动
+        ['click', 'touchstart', 'scroll', 'keydown'].forEach(event => {
+            document.addEventListener(event, () => {
+                lastActivity = Date.now();
+            });
+        });
+        
+        // 设置自动刷新检查
+        setInterval(() => {
+            const now = Date.now();
+            if (now - lastActivity > refreshInterval) {
+                // 用户60秒内无操作，询问是否刷新
+                if (confirm('页面已加载60秒，是否刷新以获取最新数据？')) {
+                    window.location.reload();
+                } else {
+                    // 用户取消，重置活动时间
+                    lastActivity = now;
+                }
+            }
+        }, 30000); // 每30秒检查一次
     </script>
 </body>
 </html>`;
