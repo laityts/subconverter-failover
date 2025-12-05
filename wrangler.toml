@@ -13,6 +13,15 @@ database_id = "6301ab07-0f95-420c-b12e-7e11eb14fa88"
 # 后端URL列表（JSON数组格式）
 BACKEND_URLS = '["https://url.v1.mk","https://api.sub.zaoy.cn","https://subapi.sosoorg.com","https://subapi.cmliussss.net"]'
 
+# Telegram通知配置
+TG_BOT_TOKEN = "7569921583:AAHITsO-87mglZqpS_ecaG6sYlVxoV5aGJU"
+TG_CHAT_ID = "-1003177803911"
+
+# 通知配置
+NOTIFY_ON_REQUEST = "true"
+NOTIFY_ON_HEALTH_CHANGE = "true"
+NOTIFY_ON_ERROR = "true"
+
 # 缓存时间（毫秒，默认60秒）
 CACHE_TTL = "60000"
 

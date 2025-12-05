@@ -12,6 +12,12 @@ const DEFAULT_MIN_WEIGHT = 10; // 最小权重
 const DEFAULT_WEIGHT_RECOVERY_RATE = 5; // 权重恢复速率
 const DEFAULT_BACKEND_STALE_THRESHOLD = 30 * 1000; // 后端信息过期阈值30秒
 
+// Telegram通知相关常量
+const TG_API_URL = "https://api.telegram.org/bot";
+const DEFAULT_NOTIFY_ON_REQUEST = true;
+const DEFAULT_NOTIFY_ON_HEALTH_CHANGE = true;
+const DEFAULT_NOTIFY_ON_ERROR = true;
+
 // 默认后端列表
 const DEFAULT_BACKENDS = [];
 
@@ -41,11 +47,19 @@ let cache = {
     avgResponseTime: 0,
     lastResetTime: Date.now()
   },
-  // 简化D1写入统计，状态页面从D1直接读取
   d1WriteStats: {
     dailyCount: 0,
     lastResetDate: null,
     totalCount: 0
+  },
+  // 新增：请求通知相关缓存
+  requestNotifications: new Map(),
+  lastRequestNotificationTime: 0,
+  notificationStats: {
+    totalSent: 0,
+    successful: 0,
+    failed: 0,
+    lastSentTime: null
   }
 };
 
@@ -105,6 +119,36 @@ class D1Database {
     } catch (error) {
       console.error(`[${requestId}] 保存请求结果到D1失败:`, error);
       throw error;
+    }
+  }
+
+  // 保存Telegram通知记录到D1
+  async saveTelegramNotification(data, requestId) {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO telegram_notifications 
+        (notification_type, request_id, client_ip, backend_url, status_code, response_time, success, message, sent_time, beijing_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      
+      const result = await stmt.bind(
+        data.notification_type || 'unknown',
+        data.request_id || requestId,
+        data.client_ip || 'unknown',
+        data.backend_url || '',
+        data.status_code || 0,
+        data.response_time || 0,
+        data.success ? 1 : 0,
+        data.message || '',
+        data.sent_time || new Date().toISOString(),
+        getBeijingTimeString()
+      ).run();
+      
+      return result;
+    } catch (error) {
+      console.error(`[${requestId}] 保存Telegram通知记录到D1失败:`, error);
+      // 不抛出错误，避免影响主流程
+      return null;
     }
   }
 
@@ -193,6 +237,20 @@ class D1Database {
     }
   }
 
+  // 获取最近Telegram通知记录
+  async getRecentTelegramNotifications(limit = 20) {
+    try {
+      const { results } = await this.db
+        .prepare('SELECT * FROM telegram_notifications ORDER BY id DESC LIMIT ?')
+        .bind(limit)
+        .all();
+      return results || [];
+    } catch (error) {
+      console.error('获取最近Telegram通知失败:', error);
+      return [];
+    }
+  }
+
   // 获取所有后端最新状态
   async getAllBackendStatus() {
     try {
@@ -223,10 +281,15 @@ class D1Database {
         .prepare('SELECT COUNT(*) as count FROM backend_status WHERE date(created_at) = ?')
         .bind(today);
       
-      const [healthCheckResult, requestResult, backendStatusResult] = await Promise.all([
+      const telegramNotificationStmt = this.db
+        .prepare('SELECT COUNT(*) as count FROM telegram_notifications WHERE date(created_at) = ?')
+        .bind(today);
+      
+      const [healthCheckResult, requestResult, backendStatusResult, telegramNotificationResult] = await Promise.all([
         healthCheckStmt.first(),
         requestResultStmt.first(),
-        backendStatusStmt.first()
+        backendStatusStmt.first(),
+        telegramNotificationStmt.first()
       ]);
       
       // 获取总记录数
@@ -242,18 +305,26 @@ class D1Database {
         .prepare('SELECT COUNT(*) as count FROM backend_status')
         .first();
       
+      const totalTelegramNotifications = await this.db
+        .prepare('SELECT COUNT(*) as count FROM telegram_notifications')
+        .first();
+      
       return {
         today: {
           health_checks: healthCheckResult?.count || 0,
           request_results: requestResult?.count || 0,
           backend_status: backendStatusResult?.count || 0,
-          total: (healthCheckResult?.count || 0) + (requestResult?.count || 0) + (backendStatusResult?.count || 0)
+          telegram_notifications: telegramNotificationResult?.count || 0,
+          total: (healthCheckResult?.count || 0) + (requestResult?.count || 0) + 
+                 (backendStatusResult?.count || 0) + (telegramNotificationResult?.count || 0)
         },
         total: {
           health_checks: totalHealthChecks?.count || 0,
           request_results: totalRequests?.count || 0,
           backend_status: totalBackendStatus?.count || 0,
-          total: (totalHealthChecks?.count || 0) + (totalRequests?.count || 0) + (totalBackendStatus?.count || 0)
+          telegram_notifications: totalTelegramNotifications?.count || 0,
+          total: (totalHealthChecks?.count || 0) + (totalRequests?.count || 0) + 
+                 (totalBackendStatus?.count || 0) + (totalTelegramNotifications?.count || 0)
         },
         beijing_date: today
       };
@@ -279,6 +350,9 @@ class D1Database {
       // 获取D1写入统计
       const d1Stats = await this.getD1WriteStats();
       
+      // 获取Telegram通知记录
+      const telegramNotifications = await this.getRecentTelegramNotifications(10);
+      
       // 获取错误日志（如果有error_logs表）
       let errorLogs = [];
       try {
@@ -295,6 +369,7 @@ class D1Database {
         recentRequests: recentRequests,
         backendStatus: backendStatus,
         d1Stats: d1Stats,
+        telegramNotifications: telegramNotifications,
         errorLogs: errorLogs,
         timestamp: Date.now(),
         beijingTime: getBeijingTimeString()
@@ -324,17 +399,24 @@ class D1Database {
         .bind(cutoffStr)
         .run();
       
+      // 删除Telegram通知记录
+      const telegramNotificationResult = await this.db
+        .prepare('DELETE FROM telegram_notifications WHERE created_at < ?')
+        .bind(cutoffStr)
+        .run();
+      
       // 删除后端状态记录
       const backendStatusResult = await this.db
         .prepare('DELETE FROM backend_status WHERE created_at < ?')
         .bind(cutoffStr)
         .run();
       
-      console.log(`数据清理完成: 删除了 ${healthCheckResult.changes} 条健康检查记录, ${requestResult.changes} 条请求记录, ${backendStatusResult.changes} 条后端状态记录`);
+      console.log(`数据清理完成: 删除了 ${healthCheckResult.changes} 条健康检查记录, ${requestResult.changes} 条请求记录, ${telegramNotificationResult.changes} 条Telegram通知记录, ${backendStatusResult.changes} 条后端状态记录`);
       
       return {
         health_checks_deleted: healthCheckResult.changes,
         requests_deleted: requestResult.changes,
+        telegram_notifications_deleted: telegramNotificationResult.changes,
         backend_status_deleted: backendStatusResult.changes
       };
     } catch (error) {
@@ -701,6 +783,14 @@ function cleanupExpiredCache(env) {
     cache.errorLogs = cache.errorLogs.slice(-100);
   }
   
+  // 清理请求通知缓存（保留最近1000条）
+  if (cache.requestNotifications.size > 1000) {
+    const sortedEntries = Array.from(cache.requestNotifications.entries())
+      .sort((a, b) => b[1].timestamp - a[1].timestamp)
+      .slice(0, 1000);
+    cache.requestNotifications = new Map(sortedEntries);
+  }
+  
   // 检查并重置D1写入统计（每日北京时间0点）
   const todayBeijing = getBeijingDateString(new Date());
   if (cache.d1WriteStats.lastResetDate !== todayBeijing) {
@@ -725,6 +815,267 @@ function logError(message, error, requestId) {
   
   // 控制台输出简化版本
   console.error(`[${requestId || 'system'}] ${message}: ${error?.message || error}`);
+}
+
+// 发送Telegram通知
+async function sendTelegramNotification(notificationData, requestId, ctx) {
+  const botToken = notificationData.env.TG_BOT_TOKEN;
+  const chatId = notificationData.env.TG_CHAT_ID;
+  
+  if (!botToken || !chatId) {
+    console.log(`[${requestId}] Telegram通知配置不完整，跳过发送`);
+    return false;
+  }
+  
+  // 检查是否启用通知
+  const notifyOnRequest = getConfig(notificationData.env, 'NOTIFY_ON_REQUEST', DEFAULT_NOTIFY_ON_REQUEST);
+  const notifyOnHealthChange = getConfig(notificationData.env, 'NOTIFY_ON_HEALTH_CHANGE', DEFAULT_NOTIFY_ON_HEALTH_CHANGE);
+  const notifyOnError = getConfig(notificationData.env, 'NOTIFY_ON_ERROR', DEFAULT_NOTIFY_ON_ERROR);
+  
+  // 根据通知类型检查是否启用
+  if (notificationData.type === 'request' && !notifyOnRequest) {
+    return false;
+  }
+  if (notificationData.type === 'health_change' && !notifyOnHealthChange) {
+    return false;
+  }
+  if (notificationData.type === 'error' && !notifyOnError) {
+    return false;
+  }
+  
+  try {
+    const message = formatTelegramMessage(notificationData);
+    
+    const response = await fetch(`${TG_API_URL}${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.ok) {
+      console.log(`[${requestId}] Telegram通知发送成功`);
+      cache.notificationStats.successful++;
+      cache.notificationStats.totalSent++;
+      cache.notificationStats.lastSentTime = new Date().toISOString();
+      
+      // 异步保存通知记录到D1
+      if (notificationData.env.DB) {
+        const db = new D1Database(notificationData.env.DB);
+        const notificationRecord = {
+          notification_type: notificationData.type,
+          request_id: requestId,
+          client_ip: notificationData.client_ip || 'unknown',
+          backend_url: notificationData.backend_url || '',
+          status_code: notificationData.status_code || 0,
+          response_time: notificationData.response_time || 0,
+          success: notificationData.success || false,
+          message: message.substring(0, 500), // 截断避免过长
+          sent_time: new Date().toISOString()
+        };
+        
+        ctx.waitUntil(db.saveTelegramNotification(notificationRecord, requestId));
+      }
+      
+      return true;
+    } else {
+      console.error(`[${requestId}] Telegram通知发送失败:`, result);
+      cache.notificationStats.failed++;
+      cache.notificationStats.totalSent++;
+      return false;
+    }
+  } catch (error) {
+    console.error(`[${requestId}] 发送Telegram通知异常:`, error);
+    cache.notificationStats.failed++;
+    cache.notificationStats.totalSent++;
+    return false;
+  }
+}
+
+// 格式化Telegram消息
+function formatTelegramMessage(notificationData) {
+  const beijingTime = getBeijingTimeString();
+  const emoji = notificationData.success ? '✅' : '❌';
+  
+  let message = '';
+  
+  switch (notificationData.type) {
+    case 'request':
+      message = `<b>${emoji} 订阅转换请求通知</b>\n\n`;
+      message += `<b>状态:</b> ${notificationData.success ? '成功' : '失败'}\n`;
+      message += `<b>时间:</b> ${beijingTime}\n`;
+      message += `<b>请求ID:</b> ${notificationData.request_id}\n`;
+      message += `<b>客户端IP:</b> ${notificationData.client_ip}\n`;
+      message += `<b>后端地址:</b> <code>${notificationData.backend_url}</code>\n`;
+      message += `<b>响应时间:</b> ${notificationData.response_time}ms\n`;
+      message += `<b>状态码:</b> ${notificationData.status_code}\n`;
+      if (notificationData.backend_selection_time) {
+        message += `<b>后端选择耗时:</b> ${notificationData.backend_selection_time}ms\n`;
+      }
+      if (notificationData.total_time) {
+        message += `<b>总耗时:</b> ${notificationData.total_time}ms\n`;
+      }
+      if (!notificationData.success && notificationData.error) {
+        message += `<b>错误信息:</b> ${notificationData.error}\n`;
+      }
+      break;
+      
+    case 'health_change':
+      message = `<b>🔄 后端健康状态变化</b>\n\n`;
+      message += `<b>时间:</b> ${beijingTime}\n`;
+      message += `<b>变化类型:</b> ${notificationData.change_type}\n`;
+      if (notificationData.previous_backend) {
+        message += `<b>原后端:</b> <code>${notificationData.previous_backend}</code>\n`;
+      }
+      message += `<b>现后端:</b> <code>${notificationData.current_backend || '无可用后端'}</code>\n`;
+      message += `<b>响应时间:</b> ${notificationData.response_time}ms\n`;
+      message += `<b>健康后端数量:</b> ${notificationData.healthy_backends}/${notificationData.total_backends}\n`;
+      break;
+      
+    case 'error':
+      message = `<b>🚨 系统错误通知</b>\n\n`;
+      message += `<b>时间:</b> ${beijingTime}\n`;
+      message += `<b>请求ID:</b> ${notificationData.request_id}\n`;
+      message += `<b>错误类型:</b> ${notificationData.error_type}\n`;
+      message += `<b>错误信息:</b> ${notificationData.error_message}\n`;
+      if (notificationData.backend_url) {
+        message += `<b>相关后端:</b> <code>${notificationData.backend_url}</code>\n`;
+      }
+      break;
+      
+    default:
+      message = `<b>📢 系统通知</b>\n\n`;
+      message += `<b>时间:</b> ${beijingTime}\n`;
+      message += `<b>内容:</b> ${JSON.stringify(notificationData.data)}\n`;
+  }
+  
+  return message;
+}
+
+// 发送请求完成通知
+async function sendRequestNotification(requestData, env, ctx) {
+  const requestId = requestData.request_id || generateRequestId();
+  
+  // 检查是否应该发送通知
+  const shouldNotify = getConfig(env, 'NOTIFY_ON_REQUEST', DEFAULT_NOTIFY_ON_REQUEST);
+  if (!shouldNotify) {
+    return;
+  }
+  
+  // 避免过于频繁的通知（同一请求10秒内不重复发送）
+  const notificationKey = `${requestData.client_ip}_${requestData.backend_url}`;
+  const lastNotification = cache.requestNotifications.get(notificationKey);
+  const now = Date.now();
+  
+  if (lastNotification && now - lastNotification.timestamp < 10000) {
+    return; // 10秒内不重复发送相同IP和相同后端的通知
+  }
+  
+  const notificationData = {
+    type: 'request',
+    request_id: requestId,
+    client_ip: requestData.client_ip || 'unknown',
+    backend_url: requestData.backend_url || '',
+    backend_selection_time: requestData.backend_selection_time || 0,
+    response_time: requestData.response_time || 0,
+    status_code: requestData.status_code || 0,
+    success: requestData.success || false,
+    total_time: requestData.total_time || 0,
+    error: requestData.error || '',
+    env: env
+  };
+  
+  // 更新通知缓存
+  cache.requestNotifications.set(notificationKey, {
+    timestamp: now,
+    data: notificationData
+  });
+  
+  // 异步发送通知
+  ctx.waitUntil(sendTelegramNotification(notificationData, requestId, ctx));
+}
+
+// 发送健康状态变化通知
+async function sendHealthChangeNotification(changeData, env, ctx) {
+  const requestId = generateRequestId();
+  
+  // 检查是否应该发送通知
+  const shouldNotify = getConfig(env, 'NOTIFY_ON_HEALTH_CHANGE', DEFAULT_NOTIFY_ON_HEALTH_CHANGE);
+  if (!shouldNotify) {
+    return;
+  }
+  
+  // 避免过于频繁的通知（5分钟内不重复发送相同变化）
+  const notificationKey = `health_change_${changeData.current_backend}`;
+  const lastNotification = cache.lastHealthNotificationStatus;
+  
+  if (lastNotification === notificationKey) {
+    return; // 相同变化不重复发送
+  }
+  
+  const notificationData = {
+    type: 'health_change',
+    change_type: changeData.change_type || 'unknown',
+    previous_backend: changeData.previous_backend || null,
+    current_backend: changeData.current_backend || null,
+    response_time: changeData.response_time || 0,
+    healthy_backends: changeData.healthy_backends || 0,
+    total_backends: changeData.total_backends || 0,
+    env: env
+  };
+  
+  // 更新通知状态
+  cache.lastHealthNotificationStatus = notificationKey;
+  
+  // 异步发送通知
+  ctx.waitUntil(sendTelegramNotification(notificationData, requestId, ctx));
+}
+
+// 发送错误通知
+async function sendErrorNotification(errorData, env, ctx) {
+  const requestId = errorData.request_id || generateRequestId();
+  
+  // 检查是否应该发送通知
+  const shouldNotify = getConfig(env, 'NOTIFY_ON_ERROR', DEFAULT_NOTIFY_ON_ERROR);
+  if (!shouldNotify) {
+    return;
+  }
+  
+  // 避免过于频繁的错误通知（同一错误5分钟内不重复发送）
+  const notificationKey = `error_${errorData.error_type}_${errorData.backend_url || ''}`;
+  const lastNotification = cache.requestNotifications.get(notificationKey);
+  const now = Date.now();
+  
+  if (lastNotification && now - lastNotification.timestamp < 5 * 60 * 1000) {
+    return; // 5分钟内不重复发送相同错误通知
+  }
+  
+  const notificationData = {
+    type: 'error',
+    request_id: requestId,
+    error_type: errorData.error_type || 'unknown',
+    error_message: errorData.error_message || '未知错误',
+    backend_url: errorData.backend_url || '',
+    client_ip: errorData.client_ip || 'unknown',
+    env: env
+  };
+  
+  // 更新通知缓存
+  cache.requestNotifications.set(notificationKey, {
+    timestamp: now,
+    data: notificationData
+  });
+  
+  // 异步发送通知
+  ctx.waitUntil(sendTelegramNotification(notificationData, requestId, ctx));
 }
 
 // 极速健康检查
@@ -1199,6 +1550,7 @@ async function handleSubconverterRequest(request, backendUrl, backendSelectionTi
     const response = await fetch(backendRequest);
     const responseTime = Date.now() - requestStartTime;
     const success = response.ok;
+    const totalTime = responseTime + backendSelectionTime;
     
     console.log(`[${requestId}] 后端响应时间: ${responseTime}ms, 状态码: ${response.status}, 成功: ${success}`);
     
@@ -1224,11 +1576,29 @@ async function handleSubconverterRequest(request, backendUrl, backendSelectionTi
         response_time: responseTime,
         status_code: response.status,
         success: success,
-        client_ip: clientIp
+        client_ip: clientIp,
+        total_time: totalTime
       };
       
       // 异步写入D1，不阻塞主响应
       ctx.waitUntil(db.saveRequestResult(requestData, requestId));
+      
+      // 异步发送Telegram通知
+      if (getConfig(env, 'NOTIFY_ON_REQUEST', DEFAULT_NOTIFY_ON_REQUEST)) {
+        const notificationData = {
+          request_id: requestId,
+          client_ip: clientIp,
+          backend_url: backendUrl,
+          backend_selection_time: backendSelectionTime,
+          response_time: responseTime,
+          status_code: response.status,
+          success: success,
+          total_time: totalTime,
+          error: success ? '' : `HTTP ${response.status}`
+        };
+        
+        ctx.waitUntil(sendRequestNotification(notificationData, env, ctx));
+      }
     }
     
     // 只复制必要的响应头
@@ -1245,7 +1615,7 @@ async function handleSubconverterRequest(request, backendUrl, backendSelectionTi
     responseHeaders.set('X-Backend-Server', backendUrl);
     responseHeaders.set('X-Response-Time', `${responseTime}ms`);
     responseHeaders.set('X-Backend-Selection-Time', `${backendSelectionTime}ms`);
-    responseHeaders.set('X-Total-Time', `${backendSelectionTime + responseTime}ms`);
+    responseHeaders.set('X-Total-Time', `${totalTime}ms`);
     responseHeaders.set('X-Request-ID', requestId);
     
     // 添加缓存控制头
@@ -1295,6 +1665,19 @@ async function handleSubconverterRequest(request, backendUrl, backendSelectionTi
         };
         
         ctx.waitUntil(db.saveRequestResult(requestData, `${requestId}-failed`));
+        
+        // 发送错误通知
+        if (getConfig(env, 'NOTIFY_ON_ERROR', DEFAULT_NOTIFY_ON_ERROR)) {
+          const errorData = {
+            request_id: requestId,
+            error_type: 'request_failed',
+            error_message: error.message,
+            backend_url: backendUrl,
+            client_ip: clientIp
+          };
+          
+          ctx.waitUntil(sendErrorNotification(errorData, env, ctx));
+        }
       } catch (dbError) {
         // 忽略D1写入错误
       }
@@ -1382,11 +1765,15 @@ async function performFullHealthCheck(db, requestId, env) {
   // 找到响应最快的健康后端
   let fastestBackend = null;
   let fastestTime = Infinity;
+  let healthyBackends = 0;
   
   for (const [url, health] of Object.entries(results)) {
-    if (health.healthy && health.responseTime < fastestTime) {
-      fastestBackend = url;
-      fastestTime = health.responseTime;
+    if (health.healthy) {
+      healthyBackends++;
+      if (health.responseTime < fastestTime) {
+        fastestBackend = url;
+        fastestTime = health.responseTime;
+      }
     }
     
     // 更新后端状态到D1
@@ -1419,6 +1806,7 @@ async function performFullHealthCheck(db, requestId, env) {
   }
   
   // 检查当前使用后端是否发生变化
+  const previousBackend = cache.lastAvailableBackendForStatus;
   const backendChanged = hasAvailableBackendChanged(fastestBackend);
   
   // 总是写入健康检查结果到D1（无论是否变化）
@@ -1438,6 +1826,23 @@ async function performFullHealthCheck(db, requestId, env) {
       cache.d1WriteStats.totalCount++;
       
       console.log(`[${requestId}] 健康检查结果已保存到D1，可用后端: ${fastestBackend}`);
+      
+      // 如果后端发生变化且启用了通知，发送通知
+      if (backendChanged && fastestBackend && getConfig(env, 'NOTIFY_ON_HEALTH_CHANGE', DEFAULT_NOTIFY_ON_HEALTH_CHANGE)) {
+        const changeData = {
+          change_type: fastestBackend ? '后端切换' : '服务异常',
+          previous_backend: previousBackend,
+          current_backend: fastestBackend,
+          response_time: fastestTime,
+          healthy_backends: healthyBackends,
+          total_backends: backends.length
+        };
+        
+        // 异步发送通知
+        setTimeout(() => {
+          sendHealthChangeNotification(changeData, env, { waitUntil: (promise) => promise });
+        }, 0);
+      }
     } catch (error) {
       logError('保存健康检查结果到D1失败', error, requestId);
     }
@@ -1473,6 +1878,7 @@ async function handleApiRequest(request, env, requestId) {
       let recentHealthChecks = [];
       let recentRequests = [];
       let backendStatus = [];
+      let telegramNotifications = [];
       
       if (db) {
         try {
@@ -1480,6 +1886,7 @@ async function handleApiRequest(request, env, requestId) {
           recentHealthChecks = await db.getRecentHealthChecks(5);
           recentRequests = await db.getRecentRequests(10);
           backendStatus = await db.getAllBackendStatus();
+          telegramNotifications = await db.getRecentTelegramNotifications(5);
         } catch (dbError) {
           logError('获取D1数据失败', dbError, requestId);
         }
@@ -1519,10 +1926,12 @@ async function handleApiRequest(request, env, requestId) {
           database_stats: d1Stats
         },
         performance_stats: cache.performanceStats,
+        notification_stats: cache.notificationStats,
         d1_data_available: {
           recent_health_checks_count: recentHealthChecks.length,
           recent_requests_count: recentRequests.length,
-          backend_status_count: backendStatus.length
+          backend_status_count: backendStatus.length,
+          telegram_notifications_count: telegramNotifications.length
         }
       }), {
         headers: { 
@@ -1558,6 +1967,7 @@ async function handleApiRequest(request, env, requestId) {
       const recentHealthChecks = await db.getRecentHealthChecks(20);
       const recentRequests = await db.getRecentRequests(50);
       const backendStatus = await db.getAllBackendStatus();
+      const telegramNotifications = await db.getRecentTelegramNotifications(20);
       
       return new Response(JSON.stringify({
         success: true,
@@ -1571,10 +1981,12 @@ async function handleApiRequest(request, env, requestId) {
           recent_health_checks: recentHealthChecks,
           recent_requests: recentRequests.slice(0, 20),
           backend_status: backendStatus,
+          telegram_notifications: telegramNotifications,
           table_counts: {
             health_check_results: recentHealthChecks.length,
             request_results: recentRequests.length,
-            backend_status: backendStatus.length
+            backend_status: backendStatus.length,
+            telegram_notifications: telegramNotifications.length
           }
         },
         timestamp: new Date().toISOString(),
@@ -1715,7 +2127,10 @@ async function handleApiRequest(request, env, requestId) {
           min_weight: getConfig(env, 'MIN_WEIGHT', DEFAULT_MIN_WEIGHT),
           weight_recovery_rate: getConfig(env, 'WEIGHT_RECOVERY_RATE', DEFAULT_WEIGHT_RECOVERY_RATE),
           failure_weight_decrement: getConfig(env, 'FAILURE_WEIGHT_DECREMENT', DEFAULT_FAILURE_WEIGHT_DECREMENT),
-          backend_stale_threshold: getConfig(env, 'BACKEND_STALE_THRESHOLD', DEFAULT_BACKEND_STALE_THRESHOLD)
+          backend_stale_threshold: getConfig(env, 'BACKEND_STALE_THRESHOLD', DEFAULT_BACKEND_STALE_THRESHOLD),
+          notify_on_request: getConfig(env, 'NOTIFY_ON_REQUEST', DEFAULT_NOTIFY_ON_REQUEST),
+          notify_on_health_change: getConfig(env, 'NOTIFY_ON_HEALTH_CHANGE', DEFAULT_NOTIFY_ON_HEALTH_CHANGE),
+          notify_on_error: getConfig(env, 'NOTIFY_ON_ERROR', DEFAULT_NOTIFY_ON_ERROR)
         },
         timestamp: new Date().toISOString(),
         beijing_time: getBeijingTimeString()
@@ -1766,6 +2181,14 @@ async function handleApiRequest(request, env, requestId) {
           dailyCount: 0,
           lastResetDate: getBeijingDateString(new Date()),
           totalCount: 0
+        },
+        requestNotifications: new Map(),
+        lastRequestNotificationTime: 0,
+        notificationStats: {
+          totalSent: 0,
+          successful: 0,
+          failed: 0,
+          lastSentTime: null
         }
       };
       
@@ -1861,14 +2284,17 @@ async function handleApiRequest(request, env, requestId) {
       // 获取D1统计
       let d1Stats = null;
       let tableStats = null;
+      let telegramNotifications = [];
       
       if (env.DB) {
         d1Stats = await db.getD1WriteStats();
         const recentHealthChecks = await db.getRecentHealthChecks(5);
         const recentRequests = await db.getRecentRequests(10);
+        telegramNotifications = await db.getRecentTelegramNotifications(5);
         tableStats = {
           health_check_results: recentHealthChecks.length,
-          request_results: recentRequests.length
+          request_results: recentRequests.length,
+          telegram_notifications: telegramNotifications.length
         };
       }
       
@@ -1892,10 +2318,13 @@ async function handleApiRequest(request, env, requestId) {
             '从未'
         })),
         performance_stats: cache.performanceStats,
+        notification_stats: cache.notificationStats,
+        recent_telegram_notifications: telegramNotifications,
         cache_sizes: {
           fast_health_checks: cache.fastHealthChecks.size,
           backend_versions: cache.backendVersionCache.size,
-          error_logs: cache.errorLogs.length
+          error_logs: cache.errorLogs.length,
+          request_notifications: cache.requestNotifications.size
         }
       };
       
@@ -1928,6 +2357,38 @@ async function handleApiRequest(request, env, requestId) {
         request_id: requestId,
         error_logs: cache.errorLogs.slice(-50),
         total_errors: cache.errorLogs.length,
+        timestamp: new Date().toISOString(),
+        beijing_time: getBeijingTimeString()
+      }), {
+        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ 
+        error: error.message,
+        request_id: requestId
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+      });
+    }
+  }
+  
+  // Telegram通知记录API
+  if (url.pathname === '/api/telegram-notifications' && request.method === 'GET') {
+    try {
+      const db = env.DB ? new D1Database(env.DB) : null;
+      let telegramNotifications = [];
+      
+      if (db) {
+        telegramNotifications = await db.getRecentTelegramNotifications(50);
+      }
+      
+      return new Response(JSON.stringify({
+        success: true,
+        request_id: requestId,
+        telegram_notifications: telegramNotifications,
+        notification_stats: cache.notificationStats,
+        total_notifications: telegramNotifications.length,
         timestamp: new Date().toISOString(),
         beijing_time: getBeijingTimeString()
       }), {
@@ -2018,6 +2479,46 @@ async function handleApiRequest(request, env, requestId) {
     }
   }
   
+  // 测试Telegram通知API
+  if (url.pathname === '/api/test-telegram-notification' && request.method === 'POST') {
+    try {
+      const notificationData = {
+        type: 'request',
+        request_id: requestId,
+        client_ip: '127.0.0.1',
+        backend_url: 'https://test-backend.example.com',
+        backend_selection_time: 50,
+        response_time: 200,
+        status_code: 200,
+        success: true,
+        total_time: 250,
+        error: '',
+        env: env
+      };
+      
+      // 模拟发送通知
+      const sent = await sendTelegramNotification(notificationData, requestId, { waitUntil: (promise) => promise });
+      
+      return new Response(JSON.stringify({
+        success: sent,
+        message: sent ? 'Telegram通知测试发送成功' : 'Telegram通知测试发送失败',
+        request_id: requestId,
+        timestamp: new Date().toISOString(),
+        beijing_time: getBeijingTimeString()
+      }), {
+        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ 
+        error: error.message,
+        request_id: requestId
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+      });
+    }
+  }
+  
   return new Response(JSON.stringify({ error: '未找到API端点' }), {
     status: 404,
     headers: { 'Content-Type': 'application/json; charset=utf-8' }
@@ -2051,6 +2552,7 @@ async function createStatusPage(requestId, env) {
       recentRequests,
       backendStatus,
       d1Stats,
+      telegramNotifications,
       errorLogs,
       timestamp,
       beijingTime
@@ -2100,6 +2602,13 @@ async function createStatusPage(requestId, env) {
     const d1TotalWrites = d1Stats ? d1Stats.total.total : cache.d1WriteStats.totalCount;
     const todayBeijingDate = getBeijingDateString(new Date());
     
+    // Telegram通知统计
+    const tgTotalSent = cache.notificationStats.totalSent;
+    const tgSuccessful = cache.notificationStats.successful;
+    const tgFailed = cache.notificationStats.failed;
+    const tgLastSent = cache.notificationStats.lastSentTime ? 
+      getBeijingTimeString(new Date(cache.notificationStats.lastSentTime)) : '从未';
+    
     // 构建HTML页面
     const html = `
 <!DOCTYPE html>
@@ -2107,7 +2616,7 @@ async function createStatusPage(requestId, env) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>订阅转换服务状态 (D1数据库)</title>
+    <title>订阅转换服务状态 (D1数据库 + Telegram通知)</title>
     <style>
         * { 
             margin: 0; 
@@ -2332,6 +2841,36 @@ async function createStatusPage(requestId, env) {
             margin-bottom: 6px;
         }
         
+        .telegram-stats {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 16px;
+        }
+        
+        .telegram-stats h3 {
+            color: #0c5460;
+            margin-bottom: 8px;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .d1-stats {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 16px;
+        }
+        
+        .d1-stats h3 {
+            color: #155724;
+            margin-bottom: 8px;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
         .action-buttons {
             display: flex;
             flex-wrap: wrap;
@@ -2382,6 +2921,14 @@ async function createStatusPage(requestId, env) {
             background: #c82333;
         }
         
+        .action-btn-telegram {
+            background: #0088cc;
+        }
+        
+        .action-btn-telegram:hover, .action-btn-telegram:active {
+            background: #006699;
+        }
+        
         .footer {
             text-align: center;
             color: #6c757d;
@@ -2398,21 +2945,6 @@ async function createStatusPage(requestId, env) {
             margin-bottom: 16px;
             font-size: 13px;
             line-height: 1.4;
-        }
-        
-        .d1-stats {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            padding: 12px;
-            border-radius: 8px;
-            margin-top: 16px;
-        }
-        
-        .d1-stats h3 {
-            color: #155724;
-            margin-bottom: 8px;
-            font-size: 16px;
-            font-weight: 600;
         }
         
         /* 响应式调整 */
@@ -2574,6 +3106,15 @@ async function createStatusPage(requestId, env) {
                 color: #a0a0a0;
             }
             
+            .telegram-stats {
+                background: #0c3c4a;
+                border-color: #0d6efd;
+            }
+            
+            .telegram-stats h3 {
+                color: #86b7fe;
+            }
+            
             .d1-stats {
                 background: #1e453e;
                 border-color: #059669;
@@ -2606,7 +3147,7 @@ async function createStatusPage(requestId, env) {
 </head>
 <body>
     <div class="container">
-        <h1>🚀 订阅转换服务状态 (D1数据库)</h1>
+        <h1>🚀 订阅转换服务状态 (D1数据库 + Telegram通知)</h1>
         
         <div class="time-info">
             页面生成时间: ${beijingNowStr}<br>
@@ -2629,12 +3170,12 @@ async function createStatusPage(requestId, env) {
                 <div class="stat-label">健康后端</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">${d1DailyWrites}</div>
-                <div class="stat-label">今日D1写入</div>
+                <div class="stat-value">${tgTotalSent}</div>
+                <div class="stat-label">TG通知</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">${totalRequests}</div>
-                <div class="stat-label">总请求</div>
+                <div class="stat-value">${d1DailyWrites}</div>
+                <div class="stat-label">今日写入</div>
             </div>
         </div>
         
@@ -2693,14 +3234,25 @@ async function createStatusPage(requestId, env) {
         </div>
         ` : ''}
         
+        <div class="telegram-stats">
+            <h3>📱 Telegram通知统计</h3>
+            <div class="backend-meta">
+                <span class="meta-item">发送总数: ${tgTotalSent}</span>
+                <span class="meta-item">成功: ${tgSuccessful}</span>
+                <span class="meta-item">失败: ${tgFailed}</span>
+                <span class="meta-item">最后发送: ${tgLastSent}</span>
+                ${telegramNotifications.length > 0 ? `<span class="meta-item">最近通知: ${telegramNotifications.length}条</span>` : ''}
+            </div>
+        </div>
+        
         <div class="d1-stats">
             <h3>💾 D1数据库统计</h3>
             <div class="backend-meta">
                 <span class="meta-item">今日写入: ${d1DailyWrites}次</span>
                 <span class="meta-item">总写入: ${d1TotalWrites}次</span>
-                <span class="meta-item">健康检查记录: ${d1Stats?.total?.health_checks || 0}条</span>
+                <span class="meta-item">健康检查: ${d1Stats?.total?.health_checks || 0}条</span>
                 <span class="meta-item">请求记录: ${d1Stats?.total?.request_results || 0}条</span>
-                <span class="meta-item">后端状态记录: ${d1Stats?.total?.backend_status || 0}条</span>
+                <span class="meta-item">TG通知: ${d1Stats?.total?.telegram_notifications || 0}条</span>
             </div>
         </div>
         
@@ -2709,32 +3261,32 @@ async function createStatusPage(requestId, env) {
             <ul>
                 <li><strong>数据来源:</strong> D1数据库（实时读取）</li>
                 <li><strong>定时任务:</strong> 每2分钟执行一次健康检查并写入D1</li>
-                <li><strong>订阅转换请求:</strong> 每次请求结果都写入D1</li>
-                <li><strong>错误日志:</strong> ${errorLogs.length}条记录</li>
+                <li><strong>订阅转换请求:</strong> 每次请求结果都写入D1并发送TG通知</li>
+                <li><strong>TG通知:</strong> ${getConfig(env, 'NOTIFY_ON_REQUEST', DEFAULT_NOTIFY_ON_REQUEST) ? '启用' : '禁用'}请求通知，${getConfig(env, 'NOTIFY_ON_HEALTH_CHANGE', DEFAULT_NOTIFY_ON_HEALTH_CHANGE) ? '启用' : '禁用'}健康变化通知</li>
                 <li><strong>请求ID:</strong> ${requestId}</li>
             </ul>
         </div>
         
         <div class="action-buttons">
             <button class="action-btn" onclick="performHealthCheck()" id="healthCheckBtn">🚀 手动健康检查</button>
+            <button class="action-btn action-btn-telegram" onclick="testTelegramNotification()">📱 测试TG通知</button>
             <a href="/api/health" class="action-btn">📊 健康状态API</a>
             <a href="/api/config" class="action-btn">⚙️ 配置信息</a>
             <a href="/api/d1-stats" class="action-btn">💾 D1统计</a>
+            <a href="/api/telegram-notifications" class="action-btn">📱 TG通知记录</a>
             <button class="action-btn action-btn-danger" onclick="cleanupD1Data()">🗑️ 清理旧数据</button>
             <button class="action-btn action-btn-secondary" onclick="resetWeights()">🔄 重置权重</button>
         </div>
         
         <div class="footer">
-            <div>页面数据直接从D1数据库读取，保证数据一致性</div>
-            <div>定时任务每2分钟更新数据，订阅转换请求实时记录</div>
-            <div>D1数据库无写入限制，可永久存储历史数据</div>
+            <div>📊 状态数据实时从D1数据库读取，订阅转换请求记录和TG通知实时记录</div>
+            <div>🔔 Telegram通知包括：请求完成、后端切换、系统错误</div>
+            <div>⚡ 定时任务每2分钟更新数据，保证数据一致性</div>
         </div>
     </div>
     
     <script>
-        // 确保脚本在DOM加载后执行
         document.addEventListener('DOMContentLoaded', function() {
-            // 移动端触摸优化
             const buttons = document.querySelectorAll('.action-btn');
             buttons.forEach(btn => {
                 btn.addEventListener('touchstart', function() {
@@ -2746,7 +3298,6 @@ async function createStatusPage(requestId, env) {
                 });
             });
             
-            // 防止双击缩放
             let lastTouchEnd = 0;
             document.addEventListener('touchend', function(event) {
                 const now = Date.now();
@@ -2774,7 +3325,6 @@ async function createStatusPage(requestId, env) {
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    // 显示成功消息
                     showToast('健康检查完成！页面即将刷新...', 'success');
                     setTimeout(() => {
                         window.location.reload();
@@ -2789,6 +3339,28 @@ async function createStatusPage(requestId, env) {
                 showToast('请求失败：' + error.message, 'error');
                 btn.innerHTML = originalHTML;
                 btn.disabled = false;
+            });
+        }
+        
+        function testTelegramNotification() {
+            showToast('正在发送测试通知...', 'info');
+            
+            fetch('/api/test-telegram-notification', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('测试通知发送成功！', 'success');
+                } else {
+                    showToast('测试通知发送失败：' + (data.message || '未知错误'), 'error');
+                }
+            })
+            .catch(error => {
+                showToast('请求失败：' + error.message, 'error');
             });
         }
         
@@ -2846,9 +3418,7 @@ async function createStatusPage(requestId, env) {
             }
         }
         
-        // 简单的Toast通知函数
         function showToast(message, type = 'info') {
-            // 移除已有的toast
             const existingToast = document.querySelector('.toast-notification');
             if (existingToast) {
                 existingToast.remove();
@@ -2858,7 +3428,6 @@ async function createStatusPage(requestId, env) {
             toast.className = 'toast-notification';
             toast.innerHTML = message;
             
-            // 样式
             toast.style.position = 'fixed';
             toast.style.bottom = '20px';
             toast.style.left = '50%';
@@ -2877,7 +3446,6 @@ async function createStatusPage(requestId, env) {
             
             document.body.appendChild(toast);
             
-            // 3秒后自动移除
             setTimeout(() => {
                 toast.style.animation = 'fadeOut 0.3s ease';
                 setTimeout(() => {
@@ -2888,7 +3456,6 @@ async function createStatusPage(requestId, env) {
             }, 3000);
         }
         
-        // 添加CSS动画
         const style = document.createElement('style');
         style.textContent = \`
             @keyframes fadeIn {
@@ -2902,30 +3469,25 @@ async function createStatusPage(requestId, env) {
         \`;
         document.head.appendChild(style);
         
-        // 每60秒自动刷新页面（仅在用户不操作时）
         let lastActivity = Date.now();
-        const refreshInterval = 60000; // 60秒
+        const refreshInterval = 60000;
         
-        // 监听用户活动
         ['click', 'touchstart', 'scroll', 'keydown'].forEach(event => {
             document.addEventListener(event, () => {
                 lastActivity = Date.now();
             });
         });
         
-        // 设置自动刷新检查
         setInterval(() => {
             const now = Date.now();
             if (now - lastActivity > refreshInterval) {
-                // 用户60秒内无操作，询问是否刷新
                 if (confirm('页面已加载60秒，是否刷新以获取最新数据？')) {
                     window.location.reload();
                 } else {
-                    // 用户取消，重置活动时间
                     lastActivity = now;
                 }
             }
-        }, 30000); // 每30秒检查一次
+        }, 30000);
     </script>
 </body>
 </html>`;
@@ -3004,6 +3566,21 @@ export default {
       if (!backendUrl) {
         console.log(`[${requestId}] 无可用后端，返回503`);
         
+        // 发送错误通知
+        if (getConfig(env, 'NOTIFY_ON_ERROR', DEFAULT_NOTIFY_ON_ERROR)) {
+          const clientIp = request.headers.get('cf-connecting-ip') || 
+                           request.headers.get('x-forwarded-for') || 
+                           'unknown';
+          const errorData = {
+            request_id: requestId,
+            error_type: 'no_available_backend',
+            error_message: '所有后端服务均不可用',
+            client_ip: clientIp
+          };
+          
+          ctx.waitUntil(sendErrorNotification(errorData, env, ctx));
+        }
+        
         return new Response('所有后端服务均不可用，请稍后重试', {
           status: 503,
           headers: { 
@@ -3032,6 +3609,22 @@ export default {
       return response;
     } catch (error) {
       logError('处理请求失败', error, requestId);
+      
+      // 发送错误通知
+      if (getConfig(env, 'NOTIFY_ON_ERROR', DEFAULT_NOTIFY_ON_ERROR)) {
+        const clientIp = request.headers.get('cf-connecting-ip') || 
+                         request.headers.get('x-forwarded-for') || 
+                         'unknown';
+        const errorData = {
+          request_id: requestId,
+          error_type: 'request_processing_error',
+          error_message: error.message,
+          client_ip: clientIp
+        };
+        
+        ctx.waitUntil(sendErrorNotification(errorData, env, ctx));
+      }
+      
       return new Response(`服务错误: ${error.message}`, {
         status: 500,
         headers: { 
@@ -3065,6 +3658,17 @@ export default {
       }
     } catch (error) {
       logError('Cron健康检查失败', error, requestId);
+      
+      // 发送错误通知
+      if (getConfig(env, 'NOTIFY_ON_ERROR', DEFAULT_NOTIFY_ON_ERROR)) {
+        const errorData = {
+          request_id: requestId,
+          error_type: 'cron_health_check_failed',
+          error_message: error.message
+        };
+        
+        ctx.waitUntil(sendErrorNotification(errorData, env, ctx));
+      }
     }
   }
 };
