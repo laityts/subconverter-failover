@@ -88,7 +88,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>订阅转换服务状态 - 智能加权轮询</title>
+    <title>订阅转换服务状态</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -731,6 +731,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
 
         .backends-list {
             margin-bottom: 20px;
+            margin-top: 40px; /* 增加与上方内容的间距 */
         }
         
         .backends-list h3 {
@@ -1128,7 +1129,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
         
         ${totalBackends > 0 ? `
         <div class="backends-list">
-            <h3>🖥️ 后端状态详情（数据来源: backend_status 表）</h3>
+            <h3>🖥️ 后端状态详情</h3>
             <div class="backends-grid">
                 ${backendStatus.map(backend => {
                   const url = backend.backend_url;
@@ -1704,7 +1705,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
                     btn.disabled = false;
                 }
             })
-            .catch(error => {
+            .catch(error) {
                 showToast('请求失败：' + error.message, 'error');
                 btn.innerHTML = originalText;
                 btn.disabled = false;
@@ -1739,7 +1740,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
                     btn.disabled = false;
                 }
             })
-            .catch(error => {
+            .catch(error) {
                 showToast('请求失败：' + error.message, 'error');
                 btn.innerHTML = originalText;
                 btn.disabled = false;
@@ -1775,7 +1776,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
                         btn.disabled = false;
                     }
                 })
-                .catch(error => {
+                .catch(error) {
                     showToast('请求失败：' + error.message, 'error');
                     btn.innerHTML = originalText;
                     btn.disabled = false;
@@ -1812,7 +1813,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
                         btn.disabled = false;
                 }
                 })
-                .catch(error => {
+                .catch(error) {
                     showToast('请求失败：' + error.message, 'error');
                     btn.innerHTML = originalText;
                     btn.disabled = false;

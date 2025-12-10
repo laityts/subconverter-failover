@@ -292,12 +292,12 @@ export function formatTelegramMessage(notificationData) {
       // 基本信息
       message += `<b>📊 基本信息</b>\n`;
       message += `<b>🆔 请求ID:</b> <code>${notificationData.request_id}</code>\n`;
-      message += `<b>📍 客户端IP:</b> ${notificationData.client_ip}\n`;
+      message += `<b>📍 客户端IP:</b> ${notificationData.client_ip || '未知'}\n`;
       message += `<b>🕐 时间:</b> ${beijingTime}\n\n`;
       
       // 后端信息
       message += `<b>🔗 后端信息</b>\n`;
-      message += `<b>后端地址:</b> <code>${notificationData.backend_url}</code>\n`;
+      message += `<b>后端地址:</b> <code>${notificationData.backend_url || '未知'}</code>\n`;
       if (notificationData.backend_weight) {
         const weightEmoji = notificationData.backend_weight >= 70 ? '🟢' : 
                           notificationData.backend_weight >= 40 ? '🟡' : '🔴';
@@ -312,10 +312,11 @@ export function formatTelegramMessage(notificationData) {
       message += `<b>⚡ 响应信息</b>\n`;
       message += `<b>状态:</b> ${success ? '<b>🟢 成功</b>' : '<b>🔴 失败</b>'}\n`;
       if (notificationData.status_code) {
-        const statusEmoji = notificationData.status_code >= 200 && notificationData.status_code < 300 ? '🟢' : '🔴';
+        const statusEmoji = notificationData.status_code >= 200 && notificationData.status_code < 300 ? '🟢' : 
+                          notificationData.status_code >= 300 && notificationData.status_code < 400 ? '🟡' : '🔴';
         message += `<b>状态码:</b> ${statusEmoji} ${notificationData.status_code}\n`;
       }
-      message += `<b>响应时间:</b> ${notificationData.response_time}ms\n`;
+      message += `<b>响应时间:</b> ${notificationData.response_time || 0}ms\n`;
       if (notificationData.total_time) {
         message += `<b>总耗时:</b> ${notificationData.total_time}ms\n`;
       }
@@ -417,7 +418,7 @@ export function formatTelegramMessage(notificationData) {
       message += `<b>🕐 时间:</b> ${beijingTime}\n`;
       message += `<b>🆔 请求ID:</b> <code>${notificationData.request_id}</code>\n`;
       message += `<b>❌ 错误类型:</b> ${notificationData.error_type}\n`;
-      message += `<b>📝 错误详情:</b>\n<code>${notificationData.error_message.substring(0, 150)}</code>\n\n`;
+      message += `<b>📝 错误详情:</b>\n<code>${notificationData.error_message?.substring(0, 150) || '无错误信息'}</code>\n\n`;
       
       if (notificationData.backend_url) {
         message += `<b>🔗 相关后端:</b> <code>${notificationData.backend_url}</code>\n`;
