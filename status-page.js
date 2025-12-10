@@ -88,7 +88,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>订阅转换服务状态</title>
+    <title>订阅转换服务状态 - 智能加权轮询</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -741,6 +741,282 @@ export async function createEnhancedStatusPage(requestId, env, db) {
             font-weight: 600;
         }
         
+        /* ============= 美化权重统计部分 ============= */
+        .weight-stats-section {
+            margin-bottom: 25px;
+        }
+        
+        .weight-stats-section h3 {
+            color: #ff6b35;
+            margin-bottom: 15px;
+            font-size: 17px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid rgba(255, 107, 53, 0.2);
+        }
+        
+        .weight-stats-section h3:before {
+            content: "⚖️";
+            font-size: 20px;
+        }
+        
+        .weight-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .weight-stat-card {
+            background: linear-gradient(135deg, #ff9a9e 0%, #fad0c4 100%);
+            border-radius: 12px;
+            padding: 16px;
+            color: #333;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(255, 107, 53, 0.15);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .weight-stat-card:nth-child(2) {
+            background: linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%);
+        }
+        
+        .weight-stat-card:nth-child(3) {
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+        }
+        
+        .weight-stat-card:nth-child(4) {
+            background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+        }
+        
+        .weight-stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(255, 107, 53, 0.25);
+        }
+        
+        .weight-stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #ff6b35, #ff9a9e);
+        }
+        
+        .weight-stat-card:nth-child(2)::before {
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+        }
+        
+        .weight-stat-card:nth-child(3)::before {
+            background: linear-gradient(90deg, #ff9a9e, #fecfef);
+        }
+        
+        .weight-stat-card:nth-child(4)::before {
+            background: linear-gradient(90deg, #43e97b, #38f9d7);
+        }
+        
+        .weight-stat-value {
+            font-size: 32px;
+            font-weight: 800;
+            margin-bottom: 8px;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .weight-stat-value .icon {
+            font-size: 24px;
+            opacity: 0.9;
+        }
+        
+        .weight-stat-label {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #555;
+        }
+        
+        .weight-stat-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+            padding-top: 10px;
+        }
+        
+        .weight-stat-detail {
+            text-align: center;
+            flex: 1;
+        }
+        
+        .weight-stat-detail-value {
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 2px;
+        }
+        
+        .weight-stat-detail-label {
+            opacity: 0.8;
+            font-size: 10px;
+        }
+        
+        /* ============= 美化D1数据库统计部分 ============= */
+        .d1-stats-section {
+            margin-bottom: 25px;
+        }
+        
+        .d1-stats-section h3 {
+            color: #9c27b0;
+            margin-bottom: 15px;
+            font-size: 17px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid rgba(156, 39, 176, 0.2);
+        }
+        
+        .d1-stats-section h3:before {
+            content: "💾";
+            font-size: 20px;
+        }
+        
+        .d1-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .d1-stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            padding: 18px;
+            color: white;
+            text-align: center;
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.2);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .d1-stat-card:nth-child(2) {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        
+        .d1-stat-card:nth-child(3) {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+        
+        .d1-stat-card:nth-child(4) {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+        }
+        
+        .d1-stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+        
+        .d1-stat-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.1) 50%, transparent 70%);
+            background-size: 200% 200%;
+            animation: shimmer 3s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { background-position: -200% -200%; }
+            100% { background-position: 200% 200%; }
+        }
+        
+        .d1-stat-value {
+            font-size: 36px;
+            font-weight: 800;
+            margin-bottom: 8px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .d1-stat-label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            opacity: 0.95;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .d1-stat-breakdown {
+            display: flex;
+            justify-content: space-around;
+            font-size: 11px;
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+            padding-top: 12px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .d1-stat-item {
+            text-align: center;
+            flex: 1;
+        }
+        
+        .d1-stat-item-value {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 3px;
+        }
+        
+        .d1-stat-item-label {
+            opacity: 0.9;
+            font-size: 10px;
+        }
+        
+        .d1-comparison {
+            background: rgba(156, 39, 176, 0.1);
+            border: 1px solid rgba(156, 39, 176, 0.2);
+            border-radius: 10px;
+            padding: 12px;
+            margin-top: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .comparison-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #6c757d;
+        }
+        
+        .comparison-value {
+            font-weight: 700;
+            color: #9c27b0;
+        }
+        
+        .comparison-icon {
+            font-size: 16px;
+        }
+        
         .info-section {
             background: #f8f9fa;
             border: 1px solid #e9ecef;
@@ -854,6 +1130,32 @@ export async function createEnhancedStatusPage(requestId, env, db) {
                 font-size: 11px;
             }
             
+            /* 移动端优化权重统计 */
+            .weight-stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .weight-stat-card {
+                padding: 14px;
+            }
+            
+            .weight-stat-value {
+                font-size: 28px;
+            }
+            
+            /* 移动端优化D1统计 */
+            .d1-stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .d1-stat-card {
+                padding: 16px;
+            }
+            
+            .d1-stat-value {
+                font-size: 30px;
+            }
+            
             .notification-card {
                 padding: 12px;
             }
@@ -885,6 +1187,14 @@ export async function createEnhancedStatusPage(requestId, env, db) {
             .telegram-stat-card {
                 padding: 16px;
             }
+            
+            .weight-stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .d1-stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
 
         @media (min-width: 1024px) {
@@ -893,6 +1203,14 @@ export async function createEnhancedStatusPage(requestId, env, db) {
             }
             
             .telegram-stats-cards {
+                grid-template-columns: repeat(4, 1fr);
+            }
+            
+            .weight-stats-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+            
+            .d1-stats-grid {
                 grid-template-columns: repeat(4, 1fr);
             }
         }
@@ -945,6 +1263,46 @@ export async function createEnhancedStatusPage(requestId, env, db) {
             .weight-bar { background: #3d3d3d; }
             .weight-fill { background: linear-gradient(90deg, #28a745, #17a2b8); }
             .weight-value { color: #d1d5db; }
+            
+            /* 深色模式下的权重统计卡片 */
+            .weight-stat-card {
+                background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%);
+                color: #e0e0e0;
+            }
+            
+            .weight-stat-card:nth-child(2) {
+                background: linear-gradient(135deg, #2c5282 0%, #3182ce 100%);
+            }
+            
+            .weight-stat-card:nth-child(3) {
+                background: linear-gradient(135deg, #744210 0%, #d69e2e 100%);
+            }
+            
+            .weight-stat-card:nth-child(4) {
+                background: linear-gradient(135deg, #22543d 0%, #38a169 100%);
+            }
+            
+            .weight-stat-label {
+                color: #d1d5db;
+            }
+            
+            /* 深色模式下的D1统计卡片 */
+            .d1-stat-card {
+                background: linear-gradient(135deg, #4c51bf 0%, #6b21a8 100%);
+            }
+            
+            .d1-stat-card:nth-child(2) {
+                background: linear-gradient(135deg, #805ad5 0%, #d53f8c 100%);
+            }
+            
+            .d1-stat-card:nth-child(3) {
+                background: linear-gradient(135deg, #3182ce 0%, #00b5d8 100%);
+            }
+            
+            .d1-stat-card:nth-child(4) {
+                background: linear-gradient(135deg, #38a169 0%, #0bc5ea 100%);
+            }
+            
             .info-section { background: #2d2d2d; border-color: #404040; }
             .info-section h3 { color: #d1d5db; }
             .info-section ul { color: #a0a0a0; }
@@ -1022,6 +1380,19 @@ export async function createEnhancedStatusPage(requestId, env, db) {
                 background: #0088cc;
                 color: white;
                 border-color: #0088cc;
+            }
+            
+            .d1-comparison {
+                background: rgba(156, 39, 176, 0.2);
+                border-color: rgba(156, 39, 176, 0.3);
+            }
+            
+            .comparison-item {
+                color: #d1d5db;
+            }
+            
+            .comparison-value {
+                color: #d6bcfa;
             }
             
             .feature-enabled { background: #1e453e; color: #34d399; border-color: #059669; }
@@ -1129,7 +1500,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
         
         ${totalBackends > 0 ? `
         <div class="backends-list">
-            <h3>🖥️ 后端状态详情</h3>
+            <h3>🖥️ 后端状态详情（数据来源: backend_status 表）</h3>
             <div class="backends-grid">
                 ${backendStatus.map(backend => {
                   const url = backend.backend_url;
@@ -1219,15 +1590,82 @@ export async function createEnhancedStatusPage(requestId, env, db) {
         </div>
         ` : ''}
         
-        <div class="weight-stats">
-            <h3>⚖️ 权重统计</h3>
-            <div class="backend-meta">
-                <span class="meta-item">平均后端权重: ${Math.round(avgBackendWeight)}</span>
-                <span class="meta-item">平均请求权重: ${Math.round(avgRequestWeight)}</span>
-                <span class="meta-item">基准权重: ${baseWeight}</span>
-                <span class="meta-item">权重范围: ${minWeight}-${maxWeight}</span>
-                <span class="meta-item">权重调整因子: ${weightAdjustmentFactor}</span>
-                <span class="meta-item">权重恢复速率: ${weightRecoveryRate}/分钟</span>
+        <!-- ============= 美化权重统计部分 ============= -->
+        <div class="weight-stats-section">
+            <h3>权重统计</h3>
+            
+            <div class="weight-stats-grid">
+                <div class="weight-stat-card">
+                    <div class="weight-stat-value">
+                        <span class="icon">⚖️</span>
+                        <span>${Math.round(avgBackendWeight)}</span>
+                    </div>
+                    <div class="weight-stat-label">平均后端权重</div>
+                    <div class="weight-stat-details">
+                        <div class="weight-stat-detail">
+                            <div class="weight-stat-detail-value">${maxWeight}</div>
+                            <div class="weight-stat-detail-label">最大权重</div>
+                        </div>
+                        <div class="weight-stat-detail">
+                            <div class="weight-stat-detail-value">${minWeight}</div>
+                            <div class="weight-stat-detail-label">最小权重</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="weight-stat-card">
+                    <div class="weight-stat-value">
+                        <span class="icon">📊</span>
+                        <span>${Math.round(avgRequestWeight)}</span>
+                    </div>
+                    <div class="weight-stat-label">平均请求权重</div>
+                    <div class="weight-stat-details">
+                        <div class="weight-stat-detail">
+                            <div class="weight-stat-detail-value">${baseWeight}</div>
+                            <div class="weight-stat-detail-label">基准权重</div>
+                        </div>
+                        <div class="weight-stat-detail">
+                            <div class="weight-stat-detail-value">${weightRecoveryRate}</div>
+                            <div class="weight-stat-detail-label">恢复速率/分</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="weight-stat-card">
+                    <div class="weight-stat-value">
+                        <span class="icon">⚡</span>
+                        <span>${weightAdjustmentFactor}</span>
+                    </div>
+                    <div class="weight-stat-label">权重调整因子</div>
+                    <div class="weight-stat-details">
+                        <div class="weight-stat-detail">
+                            <div class="weight-stat-detail-value">${healthyBackends}</div>
+                            <div class="weight-stat-detail-label">健康后端</div>
+                        </div>
+                        <div class="weight-stat-detail">
+                            <div class="weight-stat-detail-value">${totalBackends}</div>
+                            <div class="weight-stat-detail-label">总后端数</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="weight-stat-card">
+                    <div class="weight-stat-value">
+                        <span class="icon">🔄</span>
+                        <span>${lbAlgorithmName}</span>
+                    </div>
+                    <div class="weight-stat-label">负载均衡算法</div>
+                    <div class="weight-stat-details">
+                        <div class="weight-stat-detail">
+                            <div class="weight-stat-detail-value">${streamingEnabled ? '✅' : '❌'}</div>
+                            <div class="weight-stat-detail-label">流式代理</div>
+                        </div>
+                        <div class="weight-stat-detail">
+                            <div class="weight-stat-detail-value">${todayRequestCount}</div>
+                            <div class="weight-stat-detail-label">今日请求</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -1337,7 +1775,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
                     const backendUrl = notification.backend_url || '';
                     const statusCode = notification.status_code || '';
                     
-                    const notificationId = notification.id || Math.random().toString(36).substr(2, 9);
+                    const notificationId = 'notif_' + (notification.id || Math.random().toString(36).substr(2, 9));
                     
                     return `
                 <div class="notification-card ${typeClass} ${isSuccess ? 'success' : 'error'}" data-type="${type}">
@@ -1396,23 +1834,88 @@ export async function createEnhancedStatusPage(requestId, env, db) {
             `}
         </div>
         
-        <div class="d1-stats">
-            <h3>💾 D1数据库统计</h3>
-            <div class="backend-meta">
-                <span class="meta-item">今日写入: ${d1DailyWrites}次</span>
-                <span class="meta-item">总写入: ${d1TotalWrites}次</span>
-                <span class="meta-item">健康检查: ${statusData.d1Stats?.total?.health_checks || 0}条</span>
-                <span class="meta-item">请求记录: ${statusData.d1Stats?.total?.request_results || 0}条</span>
-                <span class="meta-item">TG通知: ${statusData.d1Stats?.total?.telegram_notifications || 0}条</span>
-                ${statusData.d1Stats?.weight_statistics ? `
-                <span class="meta-item">平均权重: ${Math.round(statusData.d1Stats.weight_statistics.avg_weight)}</span>
-                <span class="meta-item">最小权重: ${statusData.d1Stats.weight_statistics.min_weight}</span>
-                <span class="meta-item">最大权重: ${statusData.d1Stats.weight_statistics.max_weight}</span>
-                ` : ''}
-                ${statusData.d1Stats?.comparison ? `
-                <span class="meta-item">昨日对比: ${statusData.d1Stats.comparison.change_percentage}</span>
-                ` : ''}
+        <!-- ============= 美化D1数据库统计部分 ============= -->
+        <div class="d1-stats-section">
+            <h3>D1数据库统计</h3>
+            
+            <div class="d1-stats-grid">
+                <div class="d1-stat-card">
+                    <div class="d1-stat-value">${d1DailyWrites}</div>
+                    <div class="d1-stat-label">今日写入总数</div>
+                    <div class="d1-stat-breakdown">
+                        <div class="d1-stat-item">
+                            <div class="d1-stat-item-value">${statusData.d1Stats?.today?.request_results || 0}</div>
+                            <div class="d1-stat-item-label">请求记录</div>
+                        </div>
+                        <div class="d1-stat-item">
+                            <div class="d1-stat-item-value">${statusData.d1Stats?.today?.telegram_notifications || 0}</div>
+                            <div class="d1-stat-item-label">TG通知</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="d1-stat-card">
+                    <div class="d1-stat-value">${d1TotalWrites}</div>
+                    <div class="d1-stat-label">历史写入总数</div>
+                    <div class="d1-stat-breakdown">
+                        <div class="d1-stat-item">
+                            <div class="d1-stat-item-value">${statusData.d1Stats?.total?.request_results || 0}</div>
+                            <div class="d1-stat-item-label">请求记录</div>
+                        </div>
+                        <div class="d1-stat-item">
+                            <div class="d1-stat-item-value">${statusData.d1Stats?.total?.telegram_notifications || 0}</div>
+                            <div class="d1-stat-item-label">TG通知</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="d1-stat-card">
+                    <div class="d1-stat-value">${todayRequestCount}</div>
+                    <div class="d1-stat-label">今日请求统计</div>
+                    <div class="d1-stat-breakdown">
+                        <div class="d1-stat-item">
+                            <div class="d1-stat-item-value">${todaySuccessfulRequests}</div>
+                            <div class="d1-stat-item-label">成功请求</div>
+                        </div>
+                        <div class="d1-stat-item">
+                            <div class="d1-stat-item-value">${todayRequestCount - todaySuccessfulRequests}</div>
+                            <div class="d1-stat-item-label">失败请求</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="d1-stat-card">
+                    <div class="d1-stat-value">${displayAvgResponseTime}</div>
+                    <div class="d1-stat-label">平均响应时间 (ms)</div>
+                    <div class="d1-stat-breakdown">
+                        <div class="d1-stat-item">
+                            <div class="d1-stat-item-value">${todayRequestCount > 0 ? Math.round(todaySuccessfulRequests / todayRequestCount * 100) : 0}%</div>
+                            <div class="d1-stat-item-label">今日成功率</div>
+                        </div>
+                        <div class="d1-stat-item">
+                            <div class="d1-stat-item-value">${totalRequests > 0 ? Math.round(successfulRequests / totalRequests * 100) : 0}%</div>
+                            <div class="d1-stat-item-label">总成功率</div>
+                        </div>
+                    </div>
+                </div>
             </div>
+            
+            ${statusData.d1Stats?.comparison ? `
+            <div class="d1-comparison">
+                <div class="comparison-item">
+                    <span class="comparison-icon">📊</span>
+                    <span>今日写入: <span class="comparison-value">${statusData.d1Stats.comparison.today_total}</span></span>
+                </div>
+                <div class="comparison-item">
+                    <span class="comparison-icon">📈</span>
+                    <span>昨日对比: <span class="comparison-value">${statusData.d1Stats.comparison.change_percentage}</span></span>
+                </div>
+                <div class="comparison-item">
+                    <span class="comparison-icon">⏱️</span>
+                    <span>平均响应: <span class="comparison-value">${displayAvgResponseTime}ms</span></span>
+                </div>
+            </div>
+            ` : ''}
         </div>
         
         <div class="info-section">
@@ -1557,6 +2060,17 @@ export async function createEnhancedStatusPage(requestId, env, db) {
             
             // 初始化消息展开状态
             initNotificationMessages();
+            
+            // 为所有展开按钮添加点击事件
+            document.querySelectorAll('.notification-expand-btn').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const id = this.getAttribute('data-id');
+                    if (id) {
+                        toggleNotificationMessage(id);
+                    }
+                });
+            });
         });
         
         // 过滤Telegram通知
@@ -1608,8 +2122,8 @@ export async function createEnhancedStatusPage(requestId, env, db) {
             });
         }
         
-        // 切换通知消息展开/收起
-        function toggleNotificationMessage(id) {
+        // 切换通知消息展开/收起 - 修复：现在在全局作用域中
+        window.toggleNotificationMessage = function(id) {
             const messageElement = document.getElementById('message-' + id);
             const button = document.querySelector('[data-id="' + id + '"]');
             
@@ -1670,7 +2184,7 @@ export async function createEnhancedStatusPage(requestId, env, db) {
                     btn.disabled = false;
                 }
             })
-            .catch(error => {
+            .catch(error) {
                 showToast('请求失败：' + error.message, 'error');
                 btn.innerHTML = originalText;
                 btn.disabled = false;
