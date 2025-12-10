@@ -1,0 +1,54 @@
+name = "subconverter-failover"
+main = "index.js"
+compatibility_date = "2024-11-28"
+
+# D1数据库绑定
+[[d1_databases]]
+binding = "DB"
+database_name = "subconverter-db"
+database_id = "abeb3a8c-3925-457b-9e24-6dc261b80a2d"
+
+# 环境变量（可在Cloudflare Dashboard中覆盖）
+[vars]
+# 后端URL列表（JSON数组格式）
+BACKEND_URLS = '["https://url.v1.mk","https://api.sub.zaoy.cn","https://subapi.sosoorg.com","https://subapi.cmliussss.net"]'
+
+# Telegram通知配置
+TG_BOT_TOKEN = "7569921583:AAHITsO-87mglZqpS_ecaG6sYlVxoV5aGJU"
+TG_CHAT_ID = "-1003177803911"
+
+# 通知配置
+NOTIFY_ON_REQUEST = "true"
+NOTIFY_ON_HEALTH_CHANGE = "true"
+NOTIFY_ON_ERROR = "true"
+
+# 健康检查配置
+HEALTH_CHECK_TIMEOUT = "2000"
+CONCURRENT_HEALTH_CHECKS = "5"
+FAST_CHECK_TIMEOUT = "800"
+FAST_CHECK_CACHE_TTL = "2000"
+
+# 负载均衡配置
+LB_ALGORITHM = "weighted_round_robin"  # 加权轮询算法
+MAX_WEIGHT = "100"
+MIN_WEIGHT = "10"
+WEIGHT_ADJUSTMENT_FACTOR = "0.3"  # 权重调整因子 (0-1)，值越小调整越平滑
+WEIGHT_RECOVERY_RATE = "2"  # 每分钟权重恢复值
+RESPONSE_TIME_WINDOW = "10"  # 响应时间滑动窗口大小（次数）
+HEALTH_THRESHOLD = "0.7"  # 健康阈值，成功率低于此值将降低权重
+FAILURE_PENALTY = "15"  # 每次失败的惩罚值
+SUCCESS_BOOST = "8"  # 每次成功的奖励值
+BASE_WEIGHT = "50"  # 初始权重
+
+# 流式处理配置
+ENABLE_STREAMING_PROXY = "true"
+STREAMING_CHUNK_SIZE = "8192"
+
+# 触发器配置
+[triggers]
+# 每2分钟执行一次（UTC时间）- 检查所有后端并更新backend_status表
+crons = ["*/2 * * * *"]
+
+# Observability 配置
+[observability]
+enabled = true
