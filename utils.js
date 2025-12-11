@@ -275,184 +275,304 @@ export function calculateResponseTimeScore(responseTime, env) {
   return Math.max(0, Math.round(score));
 }
 
-// 【修改】格式化Telegram消息（优化健康状态变化通知）
+// 获取状态表情符号
+function getStatusEmoji(status, value) {
+  // 根据状态和值返回对应的表情符号
+  if (status === 'healthy') {
+    if (value === true) return '🟢';
+    if (value === false) return '🔴';
+    return '⚪';
+  }
+  
+  if (status === 'weight') {
+    if (value >= 80) return '🏆';
+    if (value >= 60) return '🟢';
+    if (value >= 40) return '🟡';
+    if (value >= 20) return '🟠';
+    return '🔴';
+  }
+  
+  if (status === 'response_time') {
+    if (value < 300) return '⚡';
+    if (value < 600) return '🏃‍♂️';
+    if (value < 1000) return '🚶‍♂️';
+    return '🐢';
+  }
+  
+  if (status === 'status_code') {
+    if (value >= 200 && value < 300) return '✅';
+    if (value >= 300 && value < 400) return '🔄';
+    if (value >= 400 && value < 500) return '⚠️';
+    if (value >= 500) return '❌';
+    return '❓';
+  }
+  
+  return '🔘';
+}
+
+// 简单的HTML转义函数
+function escapeHtmlSimple(text) {
+  if (typeof text !== 'string') return text;
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// 【美化】格式化Telegram消息
 export function formatTelegramMessage(notificationData) {
   const beijingTime = getBeijingTimeString();
+  const [date, time] = beijingTime.split(' ');
   
+  // 通用头部
   let message = '';
   
+  // 根据通知类型定制标题
   switch (notificationData.type) {
     case 'request':
       const success = notificationData.success;
-      const emoji = success ? '✅' : '❌';
+      const titleEmoji = success ? '✅' : '❌';
+      const statusEmoji = getStatusEmoji('healthy', success);
       
-      message = `<b>${emoji} 📡 订阅转换请求通知</b>\n`;
-      message += `<i>━━━━━━━━━━━━━━━━━━━</i>\n\n`;
+      message += `<b>${titleEmoji} 订阅请求通知</b>\n`;
+      message += `<code>━━━━━━━━━━━━━━━━━━━</code>\n\n`;
       
-      // 基本信息
-      message += `<b>📊 基本信息</b>\n`;
-      message += `<b>🆔 请求ID:</b> <code>${notificationData.request_id}</code>\n`;
-      message += `<b>📍 客户端IP:</b> ${notificationData.client_ip || '未知'}\n`;
-      message += `<b>🕐 时间:</b> ${beijingTime}\n\n`;
+      // 状态摘要
+      message += `<b>📊 状态摘要</b>\n`;
+      message += `${statusEmoji} 状态: <b>${success ? '成功' : '失败'}</b>\n`;
+      
+      // 请求信息
+      message += `\n<b>📝 请求信息</b>\n`;
+      message += `🆔 ID: <code>${notificationData.request_id}</code>\n`;
+      message += `📍 IP: ${notificationData.client_ip || '未知'}\n`;
+      message += `🕐 时间: ${date} ${time}\n`;
       
       // 后端信息
-      message += `<b>🔗 后端信息</b>\n`;
-      message += `<b>后端地址:</b> <code>${notificationData.backend_url || '未知'}</code>\n`;
-      if (notificationData.backend_weight) {
-        const weightEmoji = notificationData.backend_weight >= 70 ? '🟢' : 
-                          notificationData.backend_weight >= 40 ? '🟡' : '🔴';
-        message += `<b>后端权重:</b> ${weightEmoji} ${notificationData.backend_weight}\n`;
+      if (notificationData.backend_url) {
+        message += `\n<b>🔗 后端信息</b>\n`;
+        // 简化URL显示
+        try {
+          const urlObj = new URL(notificationData.backend_url);
+          const domain = urlObj.hostname;
+          const shortDomain = domain.length > 20 ? domain.substring(0, 20) + '...' : domain;
+          
+          message += `🌐 域名: <code>${shortDomain}</code>\n`;
+        } catch {
+          message += `🌐 后端: <code>${notificationData.backend_url.substring(0, 30)}...</code>\n`;
+        }
+        
+        if (notificationData.backend_weight) {
+          const weightEmoji = getStatusEmoji('weight', notificationData.backend_weight);
+          message += `${weightEmoji} 权重: <b>${notificationData.backend_weight}</b>\n`;
+        }
+        
+        if (notificationData.backend_selection_time) {
+          message += `⏱️ 选择耗时: ${notificationData.backend_selection_time}ms\n`;
+        }
       }
-      if (notificationData.backend_selection_time) {
-        message += `<b>选择耗时:</b> ${notificationData.backend_selection_time}ms\n`;
-      }
-      message += `<b>负载算法:</b> ${notificationData.algorithm || '智能加权轮询'}\n\n`;
       
-      // 响应信息
-      message += `<b>⚡ 响应信息</b>\n`;
-      message += `<b>状态:</b> ${success ? '<b>🟢 成功</b>' : '<b>🔴 失败</b>'}\n`;
+      // 响应详情
+      message += `\n<b>📈 响应详情</b>\n`;
+      
       if (notificationData.status_code) {
-        const statusEmoji = notificationData.status_code >= 200 && notificationData.status_code < 300 ? '🟢' : 
-                          notificationData.status_code >= 300 && notificationData.status_code < 400 ? '🟡' : '🔴';
-        message += `<b>状态码:</b> ${statusEmoji} ${notificationData.status_code}\n`;
-      }
-      message += `<b>响应时间:</b> ${notificationData.response_time || 0}ms\n`;
-      if (notificationData.total_time) {
-        message += `<b>总耗时:</b> ${notificationData.total_time}ms\n`;
+        const statusEmoji = getStatusEmoji('status_code', notificationData.status_code);
+        message += `${statusEmoji} 状态码: <b>${notificationData.status_code}</b>\n`;
       }
       
+      if (notificationData.response_time) {
+        const speedEmoji = getStatusEmoji('response_time', notificationData.response_time);
+        message += `${speedEmoji} 响应时间: <b>${notificationData.response_time}ms</b>\n`;
+      }
+      
+      if (notificationData.total_time) {
+        message += `⏱️ 总耗时: ${notificationData.total_time}ms\n`;
+      }
+      
+      // 错误信息（如果有）
       if (!success && notificationData.error) {
-        message += `\n<b>❌ 错误信息:</b>\n<code>${notificationData.error.substring(0, 100)}</code>\n`;
+        const errorShort = notificationData.error.length > 100 
+          ? notificationData.error.substring(0, 100) + '...' 
+          : notificationData.error;
+        message += `\n<b>⚠️ 错误信息</b>\n`;
+        message += `<code>${escapeHtmlSimple(errorShort)}</code>\n`;
       }
       break;
       
     case 'health_change':
-      message = `<b>🔄 🌡️ 后端健康状态变化</b>\n`;
-      message += `<i>━━━━━━━━━━━━━━━━━━━</i>\n\n`;
+      const changeType = notificationData.change_type;
+      let titleIcon = '🔄';
+      if (changeType && changeType.includes('切换')) titleIcon = '🔄';
+      if (changeType && changeType.includes('恢复')) titleIcon = '🆕';
+      if (changeType && changeType.includes('不可用')) titleIcon = '⚠️';
       
-      message += `<b>📊 变化概况</b>\n`;
-      message += `<b>🕐 时间:</b> ${beijingTime}\n`;
-      message += `<b>🔄 变化类型:</b> ${notificationData.change_type}\n`;
-      message += `<b>💚 健康后端:</b> ${notificationData.healthy_backends}/${notificationData.total_backends}\n\n`;
+      message += `<b>${titleIcon} 健康状态变化</b>\n`;
+      message += `<code>━━━━━━━━━━━━━━━━━━━</code>\n\n`;
       
-      // 显示权重信息
-      if (notificationData.highest_weight_info) {
-        message += `<b>🏆 最高权重后端</b>\n`;
-        message += `<b>后端地址:</b> <code>${notificationData.current_backend}</code>\n`;
-        message += `<b>权重:</b> ${notificationData.highest_weight_info.weight}\n`;
-        // 【新增】在平均响应时间上方添加当前响应时间
-        if (notificationData.highest_weight_info.current_response_time) {
-          message += `<b>当前响应时间:</b> ${notificationData.highest_weight_info.current_response_time}ms\n`;
+      // 变化概览
+      message += `<b>📊 变化概览</b>\n`;
+      message += `📅 日期: ${date}\n`;
+      message += `🕐 时间: ${time}\n`;
+      message += `🔄 类型: <b>${changeType || '状态变化'}</b>\n`;
+      
+      const healthyBackends = notificationData.healthy_backends || 0;
+      const totalBackends = notificationData.total_backends || 0;
+      const healthPercent = totalBackends > 0 
+        ? Math.round((healthyBackends / totalBackends) * 100) 
+        : 0;
+      
+      message += `💚 健康率: <b>${healthyBackends}/${totalBackends}</b> (${healthPercent}%)\n`;
+      
+      // 后端详细信息
+      if (notificationData.current_backend || notificationData.previous_backend) {
+        message += `\n<b>🔗 后端详情</b>\n`;
+        
+        if (notificationData.previous_backend && notificationData.current_backend) {
+          try {
+            const prevUrl = new URL(notificationData.previous_backend);
+            const currUrl = new URL(notificationData.current_backend);
+            message += `⬅️ 原后端: <code>${prevUrl.hostname}</code>\n`;
+            message += `➡️ 新后端: <code>${currUrl.hostname}</code>\n`;
+          } catch {
+            message += `⬅️ 原后端: <code>${notificationData.previous_backend.substring(0, 30)}...</code>\n`;
+            message += `➡️ 新后端: <code>${notificationData.current_backend.substring(0, 30)}...</code>\n`;
+          }
+        } else if (notificationData.current_backend) {
+          try {
+            const currUrl = new URL(notificationData.current_backend);
+            message += `🎉 恢复后端: <code>${currUrl.hostname}</code>\n`;
+          } catch {
+            message += `🎉 恢复后端: <code>${notificationData.current_backend.substring(0, 30)}...</code>\n`;
+          }
+        } else if (notificationData.previous_backend) {
+          try {
+            const prevUrl = new URL(notificationData.previous_backend);
+            message += `⚠️ 失效后端: <code>${prevUrl.hostname}</code>\n`;
+          } catch {
+            message += `⚠️ 失效后端: <code>${notificationData.previous_backend.substring(0, 30)}...</code>\n`;
+          }
         }
-        message += `<b>平均响应时间:</b> ${notificationData.highest_weight_info.avg_response_time}ms\n\n`;
+        
+        // 权重和响应时间信息
+        if (notificationData.highest_weight_info) {
+          const info = notificationData.highest_weight_info;
+          const weightEmoji = getStatusEmoji('weight', info.weight || 0);
+          const speedEmoji = getStatusEmoji('response_time', info.current_response_time || info.avg_response_time || 0);
+          
+          message += `${weightEmoji} 权重: <b>${info.weight || 0}</b>\n`;
+          message += `${speedEmoji} 当前响应: <b>${info.current_response_time || 0}ms</b>\n`;
+          message += `📊 平均响应: <b>${info.avg_response_time || 0}ms</b>\n`;
+        }
       }
       
-      // 只有在后端切换时才显示原后端
-      if (notificationData.change_type === '后端切换' && notificationData.previous_backend) {
-        message += `<b>⬅️ 原后端:</b>\n<code>${notificationData.previous_backend}</code>\n`;
-        message += `<b>➡️ 新后端:</b> <code>${notificationData.current_backend}</code>\n\n`;
-      } else if (!notificationData.current_backend && notificationData.previous_backend) {
-        message += `<b>⚠️ 原后端失效:</b> <code>${notificationData.previous_backend}</code>\n`;
-        message += `<b>当前状态:</b> <i>无可用后端</i>\n\n`;
-      } else if (notificationData.current_backend && !notificationData.previous_backend) {
-        message += `<b>🎉 新后端恢复:</b> <code>${notificationData.current_backend}</code>\n\n`;
-      }
-      
-      // 显示原因
-      if (notificationData.reason) {
-        message += `<b>📝 变化原因:</b> ${notificationData.reason}\n\n`;
-      }
-      
-      // 显示权重信息
+      // 权重排行榜（如果有）
       if (notificationData.weight_statistics && notificationData.weight_statistics.length > 0) {
-        message += `<b>⚖️ 权重变化统计</b>\n`;
-        message += `<i>─────────────────</i>\n`;
+        message += `\n<b>🏆 权重排行榜</b>\n`;
+        message += `<code>────────────────</code>\n`;
         
-        // 按权重排序
-        const sortedStats = [...notificationData.weight_statistics]
-          .sort((a, b) => b.weight - a.weight)
-          .slice(0, 8); // 只显示前8个
+        // 只显示前5个
+        const topBackends = [...notificationData.weight_statistics]
+          .sort((a, b) => (b.weight || 0) - (a.weight || 0))
+          .slice(0, 5);
         
-        sortedStats.forEach((stat, index) => {
+        topBackends.forEach((backend, index) => {
           const rankEmoji = index === 0 ? '🥇' : 
                            index === 1 ? '🥈' : 
                            index === 2 ? '🥉' : '•';
-          const healthEmoji = stat.healthy ? '✅' : '❌';
-          const truncatedUrl = stat.url.length > 25 ? stat.url.substring(0, 22) + '...' : stat.url;
+          const healthEmoji = backend.healthy ? '✅' : '❌';
           
-          // 权重颜色标记
-          let weightText = `${stat.weight}`;
-          if (stat.weight >= 70) {
-            weightText = `<b>${stat.weight}</b> 🟢`;
-          } else if (stat.weight >= 40) {
-            weightText = `${stat.weight} 🟡`;
-          } else {
-            weightText = `${stat.weight} 🔴`;
-          }
-          
-          // 响应时间标记
-          let responseTimeText = '';
-          if (stat.responseTime) {
-            if (stat.responseTime < 300) {
-              responseTimeText = ` ⚡${stat.responseTime}ms`;
-            } else if (stat.responseTime < 800) {
-              responseTimeText = ` ⏱️${stat.responseTime}ms`;
-            } else {
-              responseTimeText = ` 🐌${stat.responseTime}ms`;
-            }
-          }
-          
-          message += `${rankEmoji} ${healthEmoji} <code>${truncatedUrl}</code>\n`;
-          message += `   权重: ${weightText}${responseTimeText}\n`;
-          
-          // 每3个后添加一个空行
-          if ((index + 1) % 3 === 0) {
-            message += '\n';
+          try {
+            const urlObj = new URL(backend.url);
+            const shortDomain = urlObj.hostname.length > 15 
+              ? urlObj.hostname.substring(0, 12) + '...' 
+              : urlObj.hostname;
+            
+            const weightEmoji = getStatusEmoji('weight', backend.weight || 0);
+            
+            message += `${rankEmoji} ${healthEmoji} <code>${shortDomain}</code>\n`;
+            message += `    ${weightEmoji} ${backend.weight || 0} | ⏱️ ${backend.responseTime || 0}ms\n`;
+          } catch {
+            const shortUrl = backend.url.length > 20 
+              ? backend.url.substring(0, 17) + '...' 
+              : backend.url;
+            const weightEmoji = getStatusEmoji('weight', backend.weight || 0);
+            
+            message += `${rankEmoji} ${healthEmoji} <code>${shortUrl}</code>\n`;
+            message += `    ${weightEmoji} ${backend.weight || 0} | ⏱️ ${backend.responseTime || 0}ms\n`;
           }
         });
-        
-        // 显示总结
-        const avgWeight = Math.round(sortedStats.reduce((sum, stat) => sum + stat.weight, 0) / sortedStats.length);
-        const healthyCount = sortedStats.filter(stat => stat.healthy).length;
-        const unhealthyCount = sortedStats.length - healthyCount;
-        
-        message += `\n<b>📈 统计总结</b>\n`;
-        message += `平均权重: ${avgWeight} | 健康: ${healthyCount}个 | 异常: ${unhealthyCount}个\n`;
+      }
+      
+      // 原因（如果有）
+      if (notificationData.reason) {
+        message += `\n<b>📝 变化原因</b>\n`;
+        message += `${notificationData.reason}\n`;
       }
       break;
       
     case 'error':
-      message = `<b>🚨 ⚠️ 系统错误通知</b>\n`;
-      message += `<i>━━━━━━━━━━━━━━━━━━━</i>\n\n`;
+      const errorType = notificationData.error_type || '未知错误';
+      let errorIcon = '⚠️';
+      if (errorType.includes('超时')) errorIcon = '⏱️';
+      if (errorType.includes('连接')) errorIcon = '🔌';
+      if (errorType.includes('网络')) errorIcon = '📡';
       
-      message += `<b>📊 错误信息</b>\n`;
-      message += `<b>🕐 时间:</b> ${beijingTime}\n`;
-      message += `<b>🆔 请求ID:</b> <code>${notificationData.request_id}</code>\n`;
-      message += `<b>❌ 错误类型:</b> ${notificationData.error_type}\n`;
-      message += `<b>📝 错误详情:</b>\n<code>${notificationData.error_message?.substring(0, 150) || '无错误信息'}</code>\n\n`;
+      message += `<b>${errorIcon} 系统错误</b>\n`;
+      message += `<code>━━━━━━━━━━━━━━━━━━━</code>\n\n`;
       
-      if (notificationData.backend_url) {
-        message += `<b>🔗 相关后端:</b> <code>${notificationData.backend_url}</code>\n`;
+      // 错误摘要
+      message += `<b>📊 错误摘要</b>\n`;
+      message += `📅 日期: ${date}\n`;
+      message += `🕐 时间: ${time}\n`;
+      message += `🆔 ID: <code>${notificationData.request_id}</code>\n`;
+      message += `⚠️ 类型: ${errorType}\n`;
+      
+      // 错误详情
+      if (notificationData.error_message) {
+        const errorShort = notificationData.error_message.length > 120 
+          ? notificationData.error_message.substring(0, 120) + '...' 
+          : notificationData.error_message;
+        message += `\n<b>📝 错误详情</b>\n`;
+        message += `<code>${escapeHtmlSimple(errorShort)}</code>\n`;
       }
-      if (notificationData.client_ip) {
-        message += `<b>📍 客户端IP:</b> ${notificationData.client_ip}\n`;
-      }
-      if (notificationData.backend_weight) {
-        message += `<b>⚖️ 后端权重:</b> ${notificationData.backend_weight}\n`;
+      
+      // 上下文信息
+      if (notificationData.backend_url || notificationData.client_ip) {
+        message += `\n<b>📋 上下文信息</b>\n`;
+        
+        if (notificationData.client_ip) {
+          message += `📍 IP: ${notificationData.client_ip}\n`;
+        }
+        
+        if (notificationData.backend_url) {
+          try {
+            const urlObj = new URL(notificationData.backend_url);
+            message += `🌐 后端: <code>${urlObj.hostname}</code>\n`;
+          } catch {
+            message += `🌐 后端: <code>${notificationData.backend_url.substring(0, 30)}...</code>\n`;
+          }
+        }
+        
+        if (notificationData.backend_weight) {
+          const weightEmoji = getStatusEmoji('weight', notificationData.backend_weight);
+          message += `${weightEmoji} 权重: ${notificationData.backend_weight}\n`;
+        }
       }
       break;
       
     default:
-      message = `<b>📢 🔔 系统通知</b>\n`;
-      message += `<i>━━━━━━━━━━━━━━━━━━━</i>\n\n`;
-      message += `<b>🕐 时间:</b> ${beijingTime}\n`;
-      message += `<b>📋 内容:</b>\n<code>${JSON.stringify(notificationData.data, null, 2).substring(0, 200)}</code>\n`;
+      message += `<b>📢 系统通知</b>\n`;
+      message += `<code>━━━━━━━━━━━━━━━━━━━</code>\n\n`;
+      message += `📅 日期: ${date}\n`;
+      message += `🕐 时间: ${time}\n`;
+      message += `📋 内容:\n<code>${JSON.stringify(notificationData.data, null, 2).substring(0, 150)}</code>\n`;
   }
   
-  // 添加分隔线和时间戳
-  message += `\n<i>━━━━━━━━━━━━━━━━━━━</i>\n`;
-  message += `<i>📅 ${beijingTime.split(' ')[0]} | 🕒 ${beijingTime.split(' ')[1]}</i>\n`;
-  message += `<i>🚀 智能加权轮询系统 v2.0</i>`;
+  // 添加页脚
+  message += `\n<code>━━━━━━━━━━━━━━━━━━━</code>\n`;
+  message += `<i>🚀 SubConverter智能负载均衡系统</i>\n`;
+  message += `<i>⏰ 北京时间: ${time} | 📅 ${date}</i>`;
   
   return message;
 }
