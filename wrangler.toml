@@ -11,7 +11,7 @@ database_id = "abeb3a8c-3925-457b-9e24-6dc261b80a2d"
 # 环境变量（可在Cloudflare Dashboard中覆盖）
 [vars]
 # 后端URL列表（JSON数组格式）
-BACKEND_URLS = '["https://url.v1.mk","https://api.sub.zaoy.cn","https://subapi.sosoorg.com","https://subapi.cmliussss.net"]'
+BACKEND_URLS = '["https://url.v1.mk","https://sub.xeton.dev","https://subapi.sosoorg.com","https://subapi.cmliussss.net"]'
 
 # Telegram通知配置
 TG_BOT_TOKEN = "7569921583:AAHITsO-87mglZqpS_ecaG6sYlVxoV5aGJU"
