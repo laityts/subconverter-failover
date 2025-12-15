@@ -19,7 +19,7 @@ TG_CHAT_ID = "-1003177803911"
 
 # 通知配置
 NOTIFY_ON_REQUEST = "true"
-NOTIFY_ON_HEALTH_CHANGE = "true"
+NOTIFY_ON_HEALTH_CHANGE = "false"
 NOTIFY_ON_ERROR = "true"
 
 # 健康检查配置
